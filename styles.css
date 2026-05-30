@@ -1,8 +1,9 @@
-/*
+.obsidian-units-result {
+	color: var(--text-muted);
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
 
-This CSS file will be included with your plugin, and
-available in the app when your plugin is enabled.
-
-If your plugin does not need CSS, delete this file.
-
-*/
+.cm-obsidian-units-result {
+	padding-inline-start: 0.25em;
+}

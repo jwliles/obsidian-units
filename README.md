@@ -1,96 +1,117 @@
-# Obsidian Sample Plugin
+# Obsidian Units
 
-This is a sample plugin for Obsidian (https://obsidian.md).
+Soulver-style inline unit conversions for Obsidian notes.
 
-This project uses Typescript to provide type checking and documentation.
-The repo depends on the latest plugin API (obsidian.d.ts) in Typescript Definition format, which contains TSDoc comments describing what it does.
+## Usage
 
-**Note:** The Obsidian API is still in early alpha and is subject to change at any time!
+Wrap a conversion expression in inline code to show the result automatically:
 
-This sample plugin demonstrates some of the basic functionality the plugin API can do.
-- Adds a ribbon icon, which shows a Notice when clicked.
-- Adds a command "Open Sample Modal" which opens a Modal.
-- Adds a plugin setting tab to the settings page.
-- Registers a global click event and output 'click' to the console.
-- Registers a global interval which logs 'setInterval' to the console.
-
-## First time developing plugins?
-
-Quick starting guide for new plugin devs:
-
-- Check if [someone already developed a plugin for what you want](https://obsidian.md/plugins)! There might be an existing plugin similar enough that you can partner up with.
-- Make a copy of this repo as a template with the "Use this template" button (login to GitHub if you don't see it).
-- Clone your repo to a local development folder. For convenience, you can place this folder in your `.obsidian/plugins/your-plugin-name` folder.
-- Install NodeJS, then run `npm i` in the command line under your repo folder.
-- Run `npm run dev` to compile your plugin from `main.ts` to `main.js`.
-- Make changes to `main.ts` (or create new `.ts` files). Those changes should be automatically compiled into `main.js`.
-- Reload Obsidian to load the new version of your plugin.
-- Enable plugin in settings window.
-- For updates to the Obsidian API run `npm update` in the command line under your repo folder.
-
-## Releasing new releases
-
-- Update your `manifest.json` with your new version number, such as `1.0.1`, and the minimum Obsidian version required for your latest release.
-- Update your `versions.json` file with `"new-plugin-version": "minimum-obsidian-version"` so older versions of Obsidian can download an older version of your plugin that's compatible.
-- Create new GitHub release using your new version number as the "Tag version". Use the exact version number, don't include a prefix `v`. See here for an example: https://github.com/obsidianmd/obsidian-sample-plugin/releases
-- Upload the files `manifest.json`, `main.js`, `styles.css` as binary attachments. Note: The manifest.json file must be in two places, first the root path of your repository and also in the release.
-- Publish the release.
-
-> You can simplify the version bump process by running `npm version patch`, `npm version minor` or `npm version major` after updating `minAppVersion` manually in `manifest.json`.
-> The command will bump version in `manifest.json` and `package.json`, and add the entry for the new version to `versions.json`
-
-## Adding your plugin to the community plugin list
-
-- Check https://github.com/obsidianmd/obsidian-releases/blob/master/plugin-review.md
-- Publish an initial version.
-- Make sure you have a `README.md` file in the root of your repo.
-- Make a pull request at https://github.com/obsidianmd/obsidian-releases to add your plugin.
-
-## How to use
-
-- Clone this repo.
-- Make sure your NodeJS is at least v16 (`node --version`).
-- `npm i` or `yarn` to install dependencies.
-- `npm run dev` to start compilation in watch mode.
-
-## Manually installing the plugin
-
-- Copy over `main.js`, `styles.css`, `manifest.json` to your vault `VaultFolder/.obsidian/plugins/your-plugin-id/`.
-
-## Improve code quality with eslint (optional)
-- [ESLint](https://eslint.org/) is a tool that analyzes your code to quickly find problems. You can run ESLint against your plugin to find common bugs and ways to improve your code. 
-- To use eslint with this project, make sure to install eslint from terminal:
-  - `npm install -g eslint`
-- To use eslint to analyze this project use this command:
-  - `eslint main.ts`
-  - eslint will then create a report with suggestions for code improvement by file and line number.
-- If your source code is in a folder, such as `src`, you can use eslint with this command to analyze all files in that folder:
-  - `eslint .\src\`
-
-## Funding URL
-
-You can include funding URLs where people who use your plugin can financially support it.
-
-The simple way is to set the `fundingUrl` field to your link in your `manifest.json` file:
-
-```json
-{
-    "fundingUrl": "https://buymeacoffee.com"
-}
+```text
+I need `33 meters to feet` of lumber.
 ```
 
-If you have multiple URLs, you can also do:
+In Reading View and Live Preview, Obsidian Units renders the calculated result after the inline code without changing the note text.
 
-```json
-{
-    "fundingUrl": {
-        "Buy Me a Coffee": "https://buymeacoffee.com",
-        "GitHub Sponsor": "https://github.com/sponsors",
-        "Patreon": "https://www.patreon.com/"
-    }
-}
+If the surrounding sentence already supplies the unit, add `| value`:
+
+```text
+I need `3 kg to pound | value` pounds of soil.
 ```
 
-## API Documentation
+Inline render modes:
 
-See https://github.com/obsidianmd/obsidian-api
+- `33 meters to feet` renders the value and unit.
+- `33 meters to feet | value` renders only the value.
+- `33 meters to feet | unit` renders only the target unit name.
+
+For editors that auto-pair backticks, a trailing plural `s` after the inline code is tolerated:
+
+```text
+`33 ounces to gram`s
+```
+
+renders as `935.5349 grams`, not `935.5349 gramss`.
+
+In Live Preview, Obsidian Units keeps the inline code editable while your cursor is inside it, so auto-paired backticks do not prevent you from finishing a target unit or adding `| value`.
+You can also type the target unit in singular form; the rendered result uses the target value to choose singular or plural output.
+
+Inline arithmetic is also supported:
+
+```text
+`10/2`
+`10 / 2`
+`10 / 2 =`
+`(10 + 2) / 3`
+`2^8`
+```
+
+Inline arithmetic can reference numeric labels from earlier lines. The context is parsed top-to-bottom; later assignments override earlier ones from that point onward.
+
+```text
+oldPay = `940`
+oldCPI = `290`
+newCPI = `330`
+newPay = `oldPay (newCPI / oldCPI)`
+
+oldPay = `1000`
+newerPay = `oldPay (newCPI / oldCPI)`
+```
+
+The labels above are available by name inside later inline arithmetic expressions. Earlier results are not recalculated from later assignments.
+
+## Performance Note
+
+Variable references are currently resolved by scanning earlier note content for each inline expression. This is simple and works well for typical notes, but large calculation-heavy documents should eventually use a per-render-pass top-down context cache.
+
+You can also write a conversion expression, place the cursor on that line, and run **Obsidian Units: Convert units in selection or current line** from the command palette.
+
+Examples:
+
+```text
+5 ft to cm
+2 cups to ml
+180 lb to kg
+72 F to C
+55 mph to km/h
+10 MiB to MB
+```
+
+The command replaces the expression with:
+
+```text
+5 ft = 152.4 cm
+```
+
+You can also select an expression inside a larger line and convert only the selection.
+
+## Commands
+
+- **Convert units in selection or current line** replaces the selected expression, or the current line if there is no selection.
+- **Insert unit conversion result only** inserts only the result at the cursor or over the current selection.
+
+## Supported Categories
+
+- Length
+- Area
+- Mass
+- Volume
+- Speed
+- Data
+- Temperature
+
+The first spreadsheet-backed categories are **Data** and **Temperature**, because those are the categories in `conversions.tsv` that currently include explicit formulas.
+
+The plugin loads `obsidian-units-core` from Rust/WASM for inline evaluation first, then falls back to the TypeScript evaluator while the Rust port is still catching up to the older TypeScript unit table.
+
+## Development
+
+```bash
+npm install
+npm run dev
+```
+
+For a production build:
+
+```bash
+npm run build
+```
