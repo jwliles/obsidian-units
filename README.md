@@ -96,12 +96,15 @@ You can also select an expression inside a larger line and convert only the sele
 - Mass
 - Volume
 - Speed
+- Acceleration
 - Data
+- Time
+- Pressure
+- Energy
+- Power
 - Temperature
 
-The first spreadsheet-backed categories are **Data** and **Temperature**, because those are the categories in `conversions.tsv` that currently include explicit formulas.
-
-The plugin loads `obsidian-units-core` from Rust/WASM for inline evaluation first, then falls back to the TypeScript evaluator while the Rust port is still catching up to the older TypeScript unit table.
+The `conversions.tsv` file is a planning/reference list for future category expansion. Runtime conversion is handled by TypeScript unit tables that convert through one base unit per category.
 
 ## Development
 

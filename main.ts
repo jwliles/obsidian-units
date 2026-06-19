@@ -1,15 +1,25 @@
-import { App, Editor, MarkdownView, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
-import { Range } from '@codemirror/state';
+import { App, Editor, MarkdownPostProcessorContext, MarkdownView, Notice, Plugin, PluginSettingTab, Setting, TFile, editorLivePreviewField } from 'obsidian';
+import { Prec, Range, StateEffect, StateField } from '@codemirror/state';
 import { Decoration, DecorationSet, EditorView, ViewPlugin, ViewUpdate, WidgetType } from '@codemirror/view';
-import initObsidianUnitsCore, { evaluate_inline as evaluateInlineWithRust } from './obsidian_units_core.js';
 
 interface ObsidianUnitsSettings {
 	precision: number;
+	renderInLivePreviewByDefault: boolean;
 }
 
 const DEFAULT_SETTINGS: ObsidianUnitsSettings = {
 	precision: 4,
+	renderInLivePreviewByDefault: true,
 };
+
+type EditorWithCodeMirror = Editor & { cm?: EditorView };
+interface LivePreviewRenderingState {
+	enabled: boolean;
+	generation: number;
+}
+
+const setLivePreviewRenderingEffect = StateEffect.define<boolean>();
+const refreshLivePreviewRenderingEffect = StateEffect.define<null>();
 
 type UnitKind = 'linear' | 'affine';
 
@@ -63,29 +73,46 @@ const LINEAR_UNITS: LinearUnit[] = [
 	// Length, base meter.
 	{ canonical: 'mm', dimension: 'length', kind: 'linear', toBase: 0.001 },
 	{ canonical: 'cm', dimension: 'length', kind: 'linear', toBase: 0.01 },
+	{ canonical: 'dm', dimension: 'length', kind: 'linear', toBase: 0.1 },
 	{ canonical: 'm', dimension: 'length', kind: 'linear', toBase: 1 },
+	{ canonical: 'dam', dimension: 'length', kind: 'linear', toBase: 10 },
+	{ canonical: 'hm', dimension: 'length', kind: 'linear', toBase: 100 },
 	{ canonical: 'km', dimension: 'length', kind: 'linear', toBase: 1000 },
+	{ canonical: 'um', dimension: 'length', kind: 'linear', toBase: 0.000001 },
+	{ canonical: 'nm', dimension: 'length', kind: 'linear', toBase: 0.000000001 },
+	{ canonical: 'ang', dimension: 'length', kind: 'linear', toBase: 0.0000000001 },
 	{ canonical: 'in', dimension: 'length', kind: 'linear', toBase: 0.0254 },
 	{ canonical: 'ft', dimension: 'length', kind: 'linear', toBase: 0.3048 },
 	{ canonical: 'yd', dimension: 'length', kind: 'linear', toBase: 0.9144 },
 	{ canonical: 'mi', dimension: 'length', kind: 'linear', toBase: 1609.344 },
 	{ canonical: 'nmi', dimension: 'length', kind: 'linear', toBase: 1852 },
+	{ canonical: 'rod', dimension: 'length', kind: 'linear', toBase: 5.0292 },
+	{ canonical: 'fur', dimension: 'length', kind: 'linear', toBase: 201.168 },
+	{ canonical: 'ly', dimension: 'length', kind: 'linear', toBase: 9460730472580800 },
+	{ canonical: 'pc', dimension: 'length', kind: 'linear', toBase: 30856775814671900 },
 
 	// Area, base square meter.
+	{ canonical: 'um^2', dimension: 'area', kind: 'linear', toBase: 1e-12 },
 	{ canonical: 'mm^2', dimension: 'area', kind: 'linear', toBase: 0.000001 },
 	{ canonical: 'cm^2', dimension: 'area', kind: 'linear', toBase: 0.0001 },
+	{ canonical: 'dm^2', dimension: 'area', kind: 'linear', toBase: 0.01 },
 	{ canonical: 'm^2', dimension: 'area', kind: 'linear', toBase: 1 },
+	{ canonical: 'dam^2', dimension: 'area', kind: 'linear', toBase: 100 },
+	{ canonical: 'hm^2', dimension: 'area', kind: 'linear', toBase: 10000 },
 	{ canonical: 'km^2', dimension: 'area', kind: 'linear', toBase: 1000000 },
 	{ canonical: 'in^2', dimension: 'area', kind: 'linear', toBase: 0.00064516 },
 	{ canonical: 'ft^2', dimension: 'area', kind: 'linear', toBase: 0.09290304 },
 	{ canonical: 'yd^2', dimension: 'area', kind: 'linear', toBase: 0.83612736 },
+	{ canonical: 'mi^2', dimension: 'area', kind: 'linear', toBase: 2589988.110336 },
 	{ canonical: 'acre', dimension: 'area', kind: 'linear', toBase: 4046.8564224 },
 	{ canonical: 'ha', dimension: 'area', kind: 'linear', toBase: 10000 },
 
 	// Mass, base gram.
+	{ canonical: 'mcg', dimension: 'mass', kind: 'linear', toBase: 0.000001 },
 	{ canonical: 'mg', dimension: 'mass', kind: 'linear', toBase: 0.001 },
 	{ canonical: 'g', dimension: 'mass', kind: 'linear', toBase: 1 },
 	{ canonical: 'kg', dimension: 'mass', kind: 'linear', toBase: 1000 },
+	{ canonical: 'ct', dimension: 'mass', kind: 'linear', toBase: 0.2 },
 	{ canonical: 'oz', dimension: 'mass', kind: 'linear', toBase: 28.349523125 },
 	{ canonical: 'lb', dimension: 'mass', kind: 'linear', toBase: 453.59237 },
 	{ canonical: 'st', dimension: 'mass', kind: 'linear', toBase: 6350.29318 },
@@ -94,6 +121,8 @@ const LINEAR_UNITS: LinearUnit[] = [
 
 	// Volume, base liter.
 	{ canonical: 'ml', dimension: 'volume', kind: 'linear', toBase: 0.001 },
+	{ canonical: 'cl', dimension: 'volume', kind: 'linear', toBase: 0.01 },
+	{ canonical: 'dl', dimension: 'volume', kind: 'linear', toBase: 0.1 },
 	{ canonical: 'l', dimension: 'volume', kind: 'linear', toBase: 1 },
 	{ canonical: 'tsp', dimension: 'volume', kind: 'linear', toBase: 0.00492892159375 },
 	{ canonical: 'tbsp', dimension: 'volume', kind: 'linear', toBase: 0.01478676478125 },
@@ -102,14 +131,31 @@ const LINEAR_UNITS: LinearUnit[] = [
 	{ canonical: 'pt', dimension: 'volume', kind: 'linear', toBase: 0.473176473 },
 	{ canonical: 'qt', dimension: 'volume', kind: 'linear', toBase: 0.946352946 },
 	{ canonical: 'gal', dimension: 'volume', kind: 'linear', toBase: 3.785411784 },
+	{ canonical: 'in^3', dimension: 'volume', kind: 'linear', toBase: 0.016387064 },
+	{ canonical: 'ft^3', dimension: 'volume', kind: 'linear', toBase: 28.316846592 },
+	{ canonical: 'yd^3', dimension: 'volume', kind: 'linear', toBase: 764.554857984 },
 	{ canonical: 'm^3', dimension: 'volume', kind: 'linear', toBase: 1000 },
 
 	// Speed, base meter per second.
+	{ canonical: 'cm/s', dimension: 'speed', kind: 'linear', toBase: 0.01 },
 	{ canonical: 'm/s', dimension: 'speed', kind: 'linear', toBase: 1 },
+	{ canonical: 'm/min', dimension: 'speed', kind: 'linear', toBase: 1 / 60 },
+	{ canonical: 'm/h', dimension: 'speed', kind: 'linear', toBase: 1 / 3600 },
 	{ canonical: 'km/h', dimension: 'speed', kind: 'linear', toBase: 0.2777777777777778 },
+	{ canonical: 'km/s', dimension: 'speed', kind: 'linear', toBase: 1000 },
 	{ canonical: 'mph', dimension: 'speed', kind: 'linear', toBase: 0.44704 },
 	{ canonical: 'knot', dimension: 'speed', kind: 'linear', toBase: 0.5144444444444445 },
 	{ canonical: 'ft/s', dimension: 'speed', kind: 'linear', toBase: 0.3048 },
+	{ canonical: 'ft/min', dimension: 'speed', kind: 'linear', toBase: 0.00508 },
+	{ canonical: 'ft/h', dimension: 'speed', kind: 'linear', toBase: 0.00008466666666666667 },
+
+	// Acceleration, base meter per second squared.
+	{ canonical: 'cm/s^2', dimension: 'acceleration', kind: 'linear', toBase: 0.01 },
+	{ canonical: 'm/s^2', dimension: 'acceleration', kind: 'linear', toBase: 1 },
+	{ canonical: 'km/h/s', dimension: 'acceleration', kind: 'linear', toBase: 0.2777777777777778 },
+	{ canonical: 'in/s^2', dimension: 'acceleration', kind: 'linear', toBase: 0.0254 },
+	{ canonical: 'ft/s^2', dimension: 'acceleration', kind: 'linear', toBase: 0.3048 },
+	{ canonical: 'mph/s', dimension: 'acceleration', kind: 'linear', toBase: 0.44704 },
 
 	// Data, base byte.
 	{ canonical: 'bit', dimension: 'data', kind: 'linear', toBase: 0.125 },
@@ -126,6 +172,50 @@ const LINEAR_UNITS: LinearUnit[] = [
 	{ canonical: 'tib', dimension: 'data', kind: 'linear', toBase: 1099511627776 },
 	{ canonical: 'pib', dimension: 'data', kind: 'linear', toBase: 1125899906842624 },
 	{ canonical: 'eib', dimension: 'data', kind: 'linear', toBase: 1152921504606847000 },
+
+	// Time, base second.
+	{ canonical: 'ns', dimension: 'time', kind: 'linear', toBase: 1e-9 },
+	{ canonical: 'us', dimension: 'time', kind: 'linear', toBase: 0.000001 },
+	{ canonical: 'ms', dimension: 'time', kind: 'linear', toBase: 0.001 },
+	{ canonical: 's', dimension: 'time', kind: 'linear', toBase: 1 },
+	{ canonical: 'min', dimension: 'time', kind: 'linear', toBase: 60 },
+	{ canonical: 'h', dimension: 'time', kind: 'linear', toBase: 3600 },
+	{ canonical: 'd', dimension: 'time', kind: 'linear', toBase: 86400 },
+	{ canonical: 'wk', dimension: 'time', kind: 'linear', toBase: 604800 },
+	{ canonical: 'yr', dimension: 'time', kind: 'linear', toBase: 31556926 },
+
+	// Pressure, base pascal.
+	{ canonical: 'pa', dimension: 'pressure', kind: 'linear', toBase: 1 },
+	{ canonical: 'kpa', dimension: 'pressure', kind: 'linear', toBase: 1000 },
+	{ canonical: 'mpa', dimension: 'pressure', kind: 'linear', toBase: 1000000 },
+	{ canonical: 'bar', dimension: 'pressure', kind: 'linear', toBase: 100000 },
+	{ canonical: 'mbar', dimension: 'pressure', kind: 'linear', toBase: 100 },
+	{ canonical: 'atm', dimension: 'pressure', kind: 'linear', toBase: 101325 },
+	{ canonical: 'psi', dimension: 'pressure', kind: 'linear', toBase: 6894.757293168 },
+	{ canonical: 'torr', dimension: 'pressure', kind: 'linear', toBase: 133.32236842105263 },
+	{ canonical: 'mmhg', dimension: 'pressure', kind: 'linear', toBase: 133.322387415 },
+
+	// Energy, base joule.
+	{ canonical: 'ev', dimension: 'energy', kind: 'linear', toBase: 1.602176634e-19 },
+	{ canonical: 'millijoule', dimension: 'energy', kind: 'linear', toBase: 0.001 },
+	{ canonical: 'j', dimension: 'energy', kind: 'linear', toBase: 1 },
+	{ canonical: 'kj', dimension: 'energy', kind: 'linear', toBase: 1000 },
+	{ canonical: 'mj', dimension: 'energy', kind: 'linear', toBase: 1000000 },
+	{ canonical: 'gj', dimension: 'energy', kind: 'linear', toBase: 1000000000 },
+	{ canonical: 'wh', dimension: 'energy', kind: 'linear', toBase: 3600 },
+	{ canonical: 'kwh', dimension: 'energy', kind: 'linear', toBase: 3600000 },
+	{ canonical: 'cal', dimension: 'energy', kind: 'linear', toBase: 4.184 },
+	{ canonical: 'kcal', dimension: 'energy', kind: 'linear', toBase: 4184 },
+	{ canonical: 'btu', dimension: 'energy', kind: 'linear', toBase: 1055.05585262 },
+	{ canonical: 'ft*lbf', dimension: 'energy', kind: 'linear', toBase: 1.3558179483314004 },
+
+	// Power, base watt.
+	{ canonical: 'milliwatt', dimension: 'power', kind: 'linear', toBase: 0.001 },
+	{ canonical: 'w', dimension: 'power', kind: 'linear', toBase: 1 },
+	{ canonical: 'kw', dimension: 'power', kind: 'linear', toBase: 1000 },
+	{ canonical: 'mw', dimension: 'power', kind: 'linear', toBase: 1000000 },
+	{ canonical: 'gw', dimension: 'power', kind: 'linear', toBase: 1000000000 },
+	{ canonical: 'hp', dimension: 'power', kind: 'linear', toBase: 745.6998715822702 },
 ];
 
 const TEMPERATURE_UNITS: AffineUnit[] = [
@@ -160,224 +250,470 @@ const TEMPERATURE_UNITS: AffineUnit[] = [
 ];
 
 const UNIT_ALIASES: Record<string, string> = {
-	millimeter: 'mm',
-	millimeters: 'mm',
+	"'": 'ft',
+	'"': 'in',
+	'centimeters per second squared': 'cm/s^2',
+	'centimeters per second': 'cm/s',
+	'centimetres per second squared': 'cm/s^2',
+	'centimetres per second': 'cm/s',
+	'cm2': 'cm^2',
+	'cu ft': 'ft^3',
+	'cu in': 'in^3',
+	'cu yd': 'yd^3',
+	'cubic feet': 'ft^3',
+	'cubic foot': 'ft^3',
+	'cubic inch': 'in^3',
+	'cubic inches': 'in^3',
+	'cubic meter': 'm^3',
+	'cubic meters': 'm^3',
+	'cubic yard': 'yd^3',
+	'cubic yards': 'yd^3',
+	'dam2': 'dam^2',
+	'degrees celsius': 'C',
+	'degrees fahrenheit': 'F',
+	'degrees rankine': 'R',
+	'dm2': 'dm^2',
+	'electron volt': 'ev',
+	'electron volts': 'ev',
+	'exabyte (eb)': 'eb',
+	'feet per hour': 'ft/h',
+	'feet per minute': 'ft/min',
+	'feet per second squared': 'ft/s^2',
+	'feet per second': 'ft/s',
+	'fluid ounce': 'fl oz',
+	'fluid ounces': 'fl oz',
+	'foot pound': 'ft*lbf',
+	'foot pounds': 'ft*lbf',
+	'foot-pound': 'ft*lbf',
+	'foot-pounds': 'ft*lbf',
+	'ft2': 'ft^2',
+	'ft3': 'ft^3',
+	'gigabyte (gb)': 'gb',
+	'hm2': 'hm^2',
+	'in2': 'in^2',
+	'in3': 'in^3',
+	'inches per second squared': 'in/s^2',
+	'kilobyte (kb)': 'kb',
+	'kilometers per hour per second': 'km/h/s',
+	'kilometers per hour': 'km/h',
+	'kilometers per second': 'km/s',
+	'kilometres per hour': 'km/h',
+	'kilometres per second': 'km/s',
+	'kilowatt hour': 'kwh',
+	'kilowatt hours': 'kwh',
+	'km2': 'km^2',
+	'kmh': 'km/h',
+	'light year': 'ly',
+	'light years': 'ly',
+	'm2': 'm^2',
+	'm3': 'm^3',
+	'megabyte (mb)': 'mb',
+	'meters per hour': 'm/h',
+	'meters per minute': 'm/min',
+	'meters per second squared': 'm/s^2',
+	'meters per second': 'm/s',
+	'metres per hour': 'm/h',
+	'metres per minute': 'm/min',
+	'metres per second squared': 'm/s^2',
+	'metres per second': 'm/s',
+	'mi2': 'mi^2',
+	'miles per hour per second': 'mph/s',
+	'miles per hour': 'mph',
+	'mm hg': 'mmhg',
+	'mm2': 'mm^2',
+	'mps': 'm/s',
+	'nautical mile': 'nmi',
+	'nautical miles': 'nmi',
+	'petabyte (pb)': 'pb',
+	'sq cm': 'cm^2',
+	'sq dam': 'dam^2',
+	'sq dm': 'dm^2',
+	'sq ft': 'ft^2',
+	'sq hm': 'hm^2',
+	'sq in': 'in^2',
+	'sq km': 'km^2',
+	'sq m': 'm^2',
+	'sq mi': 'mi^2',
+	'sq mm': 'mm^2',
+	'sq um': 'um^2',
+	'sq yd': 'yd^2',
+	'square centimeter': 'cm^2',
+	'square centimeters': 'cm^2',
+	'square decameter': 'dam^2',
+	'square decameters': 'dam^2',
+	'square decimeter': 'dm^2',
+	'square decimeters': 'dm^2',
+	'square feet': 'ft^2',
+	'square foot': 'ft^2',
+	'square hectometer': 'hm^2',
+	'square hectometers': 'hm^2',
+	'square inch': 'in^2',
+	'square inches': 'in^2',
+	'square kilometer': 'km^2',
+	'square kilometers': 'km^2',
+	'square meter': 'm^2',
+	'square meters': 'm^2',
+	'square micrometer': 'um^2',
+	'square micrometers': 'um^2',
+	'square micron': 'um^2',
+	'square microns': 'um^2',
+	'square mile': 'mi^2',
+	'square miles': 'mi^2',
+	'square millimeter': 'mm^2',
+	'square millimeters': 'mm^2',
+	'square yard': 'yd^2',
+	'square yards': 'yd^2',
+	'terabyte (tb)': 'tb',
+	'um2': 'um^2',
+	'watt hour': 'wh',
+	'watt hours': 'wh',
+	'yd2': 'yd^2',
+	'yd3': 'yd^3',
+	acres: 'acre',
+	angstrom: 'ang',
+	angstroms: 'ang',
+	atmosphere: 'atm',
+	atmospheres: 'atm',
+	b: 'bit',
+	bars: 'bar',
+	bit: 'bit',
+	bits: 'bit',
+	btu: 'btu',
+	btus: 'btu',
+	byte: 'byte',
+	bytes: 'byte',
+	calorie: 'cal',
+	calories: 'cal',
+	carat: 'ct',
+	carats: 'ct',
+	celsius: 'C',
+	centiliter: 'cl',
+	centiliters: 'cl',
+	centilitre: 'cl',
+	centilitres: 'cl',
 	centimeter: 'cm',
 	centimeters: 'cm',
-	meter: 'm',
-	meters: 'm',
-	metre: 'm',
-	metres: 'm',
+	cups: 'cup',
+	day: 'd',
+	days: 'd',
+	decameter: 'dam',
+	decameters: 'dam',
+	deciliter: 'dl',
+	deciliters: 'dl',
+	decilitre: 'dl',
+	decilitres: 'dl',
+	decimeter: 'dm',
+	decimeters: 'dm',
+	dekameter: 'dam',
+	dekameters: 'dam',
+	ev: 'ev',
+	exabyte: 'eb',
+	exabytes: 'eb',
+	exbibyte: 'eib',
+	exbibytes: 'eib',
+	fahrenheit: 'F',
+	feet: 'ft',
+	foot: 'ft',
+	furlong: 'fur',
+	furlongs: 'fur',
+	gallon: 'gal',
+	gallons: 'gal',
+	gibibyte: 'gib',
+	gibibytes: 'gib',
+	gigabyte: 'gb',
+	gigabytes: 'gb',
+	gigajoule: 'gj',
+	gigajoules: 'gj',
+	gigawatt: 'gw',
+	gigawatts: 'gw',
+	gram: 'g',
+	grams: 'g',
+	hectare: 'ha',
+	hectares: 'ha',
+	hectometer: 'hm',
+	hectometers: 'hm',
+	horsepower: 'hp',
+	hour: 'h',
+	hours: 'h',
+	hr: 'h',
+	hrs: 'h',
+	inch: 'in',
+	inches: 'in',
+	joule: 'j',
+	joules: 'j',
+	kelvin: 'K',
+	kgs: 'kg',
+	kibibyte: 'kib',
+	kibibytes: 'kib',
+	kilobyte: 'kb',
+	kilobytes: 'kb',
+	kilocalorie: 'kcal',
+	kilocalories: 'kcal',
+	kilogram: 'kg',
+	kilograms: 'kg',
+	kilojoule: 'kj',
+	kilojoules: 'kj',
 	kilometer: 'km',
 	kilometers: 'km',
 	kilometre: 'km',
 	kilometres: 'km',
-	inch: 'in',
-	inches: 'in',
-	'"': 'in',
-	foot: 'ft',
-	feet: 'ft',
-	"'": 'ft',
-	yard: 'yd',
-	yards: 'yd',
-	mile: 'mi',
-	miles: 'mi',
-	'nautical mile': 'nmi',
-	'nautical miles': 'nmi',
-	sqmm: 'mm^2',
-	'sq mm': 'mm^2',
-	'mm2': 'mm^2',
-	'square millimeter': 'mm^2',
-	'square millimeters': 'mm^2',
-	sqcm: 'cm^2',
-	'sq cm': 'cm^2',
-	'cm2': 'cm^2',
-	'square centimeter': 'cm^2',
-	'square centimeters': 'cm^2',
-	sqm: 'm^2',
-	'sq m': 'm^2',
-	'm2': 'm^2',
-	'square meter': 'm^2',
-	'square meters': 'm^2',
-	sqkm: 'km^2',
-	'sq km': 'km^2',
-	'km2': 'km^2',
-	'square kilometer': 'km^2',
-	'square kilometers': 'km^2',
-	sqin: 'in^2',
-	'sq in': 'in^2',
-	'in2': 'in^2',
-	'square inch': 'in^2',
-	'square inches': 'in^2',
-	sqft: 'ft^2',
-	'sq ft': 'ft^2',
-	'ft2': 'ft^2',
-	'square foot': 'ft^2',
-	'square feet': 'ft^2',
-	sqyd: 'yd^2',
-	'sq yd': 'yd^2',
-	'yd2': 'yd^2',
-	'square yard': 'yd^2',
-	'square yards': 'yd^2',
-	acres: 'acre',
-	hectare: 'ha',
-	hectares: 'ha',
-	milligram: 'mg',
-	milligrams: 'mg',
-	mgs: 'mg',
-	gram: 'g',
-	grams: 'g',
-	kilogram: 'kg',
-	kilograms: 'kg',
-	kgs: 'kg',
-	ounce: 'oz',
-	ounces: 'oz',
-	ozs: 'oz',
-	pound: 'lb',
-	pounds: 'lb',
+	kilopascal: 'kpa',
+	kilopascals: 'kpa',
+	kilowatt: 'kw',
+	kilowatts: 'kw',
+	kn: 'knot',
+	knots: 'knot',
+	kph: 'km/h',
+	kt: 'knot',
 	lbs: 'lb',
-	stone: 'st',
-	tons: 'ton',
-	tonnes: 'tonne',
-	milliliter: 'ml',
-	milliliters: 'ml',
-	millilitre: 'ml',
-	millilitres: 'ml',
 	liter: 'l',
 	liters: 'l',
 	litre: 'l',
 	litres: 'l',
-	teaspoon: 'tsp',
-	teaspoons: 'tsp',
-	tablespoon: 'tbsp',
-	tablespoons: 'tbsp',
-	'fluid ounce': 'fl oz',
-	'fluid ounces': 'fl oz',
-	cups: 'cup',
-	pint: 'pt',
-	pints: 'pt',
-	quart: 'qt',
-	quarts: 'qt',
-	gallon: 'gal',
-	gallons: 'gal',
-	'm3': 'm^3',
-	'cubic meter': 'm^3',
-	'cubic meters': 'm^3',
-	kph: 'km/h',
-	'kmh': 'km/h',
-	'kilometers per hour': 'km/h',
-	'kilometres per hour': 'km/h',
-	'meters per second': 'm/s',
-	'metres per second': 'm/s',
-	'mps': 'm/s',
-	'miles per hour': 'mph',
-	knots: 'knot',
-	'feet per second': 'ft/s',
-	bit: 'bit',
-	bits: 'bit',
-	byte: 'byte',
-	bytes: 'byte',
-	b: 'byte',
-	'kilobyte (kb)': 'kb',
-	kilobyte: 'kb',
-	kilobytes: 'kb',
-	'megabyte (mb)': 'mb',
-	megabyte: 'mb',
-	megabytes: 'mb',
-	'gigabyte (gb)': 'gb',
-	gigabyte: 'gb',
-	gigabytes: 'gb',
-	'terabyte (tb)': 'tb',
-	terabyte: 'tb',
-	terabytes: 'tb',
-	'petabyte (pb)': 'pb',
-	petabyte: 'pb',
-	petabytes: 'pb',
-	'exabyte (eb)': 'eb',
-	exabyte: 'eb',
-	exabytes: 'eb',
-	kibibyte: 'kib',
-	kibibytes: 'kib',
 	mebibyte: 'mib',
 	mebibytes: 'mib',
-	gibibyte: 'gib',
-	gibibytes: 'gib',
-	tebibyte: 'tib',
-	tebibytes: 'tib',
+	megabyte: 'mb',
+	megabytes: 'mb',
+	megajoule: 'mj',
+	megajoules: 'mj',
+	megapascal: 'mpa',
+	megapascals: 'mpa',
+	megawatt: 'mw',
+	megawatts: 'mw',
+	meter: 'm',
+	meters: 'm',
+	metre: 'm',
+	metres: 'm',
+	mgs: 'mg',
+	microgram: 'mcg',
+	micrograms: 'mcg',
+	micrometer: 'um',
+	micrometers: 'um',
+	micrometre: 'um',
+	micrometres: 'um',
+	micron: 'um',
+	microns: 'um',
+	microsecond: 'us',
+	microseconds: 'us',
+	mile: 'mi',
+	miles: 'mi',
+	millibar: 'mbar',
+	millibars: 'mbar',
+	milligram: 'mg',
+	milligrams: 'mg',
+	millijoule: 'millijoule',
+	millijoules: 'millijoule',
+	milliliter: 'ml',
+	milliliters: 'ml',
+	millilitre: 'ml',
+	millilitres: 'ml',
+	millimeter: 'mm',
+	millimeters: 'mm',
+	millisecond: 'ms',
+	milliseconds: 'ms',
+	milliwatt: 'milliwatt',
+	milliwatts: 'milliwatt',
+	minute: 'min',
+	minutes: 'min',
+	mmhg: 'mmhg',
+	nanometer: 'nm',
+	nanometers: 'nm',
+	nanometre: 'nm',
+	nanometres: 'nm',
+	nanosecond: 'ns',
+	nanoseconds: 'ns',
+	ounce: 'oz',
+	ounces: 'oz',
+	ozs: 'oz',
+	pa: 'pa',
+	parsec: 'pc',
+	parsecs: 'pc',
+	pascal: 'pa',
+	pascals: 'pa',
 	pebibyte: 'pib',
 	pebibytes: 'pib',
-	exbibyte: 'eib',
-	exbibytes: 'eib',
-	celsius: 'C',
-	'degrees celsius': 'C',
-	fahrenheit: 'F',
-	'degrees fahrenheit': 'F',
-	rankine: 'R',
-	'degrees rankine': 'R',
+	petabyte: 'pb',
+	petabytes: 'pb',
+	pint: 'pt',
+	pints: 'pt',
+	pound: 'lb',
+	pounds: 'lb',
+	psi: 'psi',
+	quart: 'qt',
+	quarts: 'qt',
 	ra: 'R',
-	kelvin: 'K',
+	rankine: 'R',
+	rod: 'rod',
+	rods: 'rod',
+	sec: 's',
+	second: 's',
+	seconds: 's',
+	secs: 's',
+	sqcm: 'cm^2',
+	sqdam: 'dam^2',
+	sqdm: 'dm^2',
+	sqft: 'ft^2',
+	sqhm: 'hm^2',
+	sqin: 'in^2',
+	sqkm: 'km^2',
+	sqm: 'm^2',
+	sqmi: 'mi^2',
+	sqmm: 'mm^2',
+	squm: 'um^2',
+	sqyd: 'yd^2',
+	stone: 'st',
+	tablespoon: 'tbsp',
+	tablespoons: 'tbsp',
+	teaspoon: 'tsp',
+	teaspoons: 'tsp',
+	tebibyte: 'tib',
+	tebibytes: 'tib',
+	terabyte: 'tb',
+	terabytes: 'tb',
+	tonnes: 'tonne',
+	tons: 'ton',
+	torr: 'torr',
+	ug: 'mcg',
+	watt: 'w',
+	watts: 'w',
+	week: 'wk',
+	weeks: 'wk',
+	yard: 'yd',
+	yards: 'yd',
+	year: 'yr',
+	years: 'yr',
 };
 
 const UNIT_DISPLAYS: Record<string, UnitDisplay> = {
-	mm: { abbr: 'mm', singular: 'millimeter', plural: 'millimeters' },
-	cm: { abbr: 'cm', singular: 'centimeter', plural: 'centimeters' },
-	m: { abbr: 'm', singular: 'meter', plural: 'meters' },
-	km: { abbr: 'km', singular: 'kilometer', plural: 'kilometers' },
-	in: { abbr: 'in', singular: 'inch', plural: 'inches' },
-	ft: { abbr: 'ft', singular: 'foot', plural: 'feet' },
-	yd: { abbr: 'yd', singular: 'yard', plural: 'yards' },
-	mi: { abbr: 'mi', singular: 'mile', plural: 'miles' },
-	nmi: { abbr: 'nmi', singular: 'nautical mile', plural: 'nautical miles' },
-	'mm^2': { abbr: 'mm^2', singular: 'square millimeter', plural: 'square millimeters' },
+	'cm/s': { abbr: 'cm/s', singular: 'centimeter per second', plural: 'centimeters per second' },
+	'cm/s^2': { abbr: 'cm/s^2', singular: 'centimeter per second squared', plural: 'centimeters per second squared' },
 	'cm^2': { abbr: 'cm^2', singular: 'square centimeter', plural: 'square centimeters' },
-	'm^2': { abbr: 'm^2', singular: 'square meter', plural: 'square meters' },
-	'km^2': { abbr: 'km^2', singular: 'square kilometer', plural: 'square kilometers' },
-	'in^2': { abbr: 'in^2', singular: 'square inch', plural: 'square inches' },
-	'ft^2': { abbr: 'ft^2', singular: 'square foot', plural: 'square feet' },
-	'yd^2': { abbr: 'yd^2', singular: 'square yard', plural: 'square yards' },
-	acre: { abbr: 'ac', singular: 'acre', plural: 'acres' },
-	ha: { abbr: 'ha', singular: 'hectare', plural: 'hectares' },
-	mg: { abbr: 'mg', singular: 'milligram', plural: 'milligrams' },
-	g: { abbr: 'g', singular: 'gram', plural: 'grams' },
-	kg: { abbr: 'kg', singular: 'kilogram', plural: 'kilograms' },
-	oz: { abbr: 'oz', singular: 'ounce', plural: 'ounces' },
-	lb: { abbr: 'lb', singular: 'pound', plural: 'pounds' },
-	st: { abbr: 'st', singular: 'stone', plural: 'stone' },
-	ton: { abbr: 'ton', singular: 'ton', plural: 'tons' },
-	tonne: { abbr: 't', singular: 'tonne', plural: 'tonnes' },
-	ml: { abbr: 'ml', singular: 'milliliter', plural: 'milliliters' },
-	l: { abbr: 'L', singular: 'liter', plural: 'liters' },
-	tsp: { abbr: 'tsp', singular: 'teaspoon', plural: 'teaspoons' },
-	tbsp: { abbr: 'tbsp', singular: 'tablespoon', plural: 'tablespoons' },
+	'dam^2': { abbr: 'dam^2', singular: 'square decameter', plural: 'square decameters' },
+	'dm^2': { abbr: 'dm^2', singular: 'square decimeter', plural: 'square decimeters' },
 	'fl oz': { abbr: 'fl oz', singular: 'fluid ounce', plural: 'fluid ounces' },
+	'ft*lbf': { abbr: 'ft lbf', singular: 'foot-pound', plural: 'foot-pounds' },
+	'ft/h': { abbr: 'ft/h', singular: 'foot per hour', plural: 'feet per hour' },
+	'ft/min': { abbr: 'ft/min', singular: 'foot per minute', plural: 'feet per minute' },
+	'ft/s': { abbr: 'ft/s', singular: 'foot per second', plural: 'feet per second' },
+	'ft/s^2': { abbr: 'ft/s^2', singular: 'foot per second squared', plural: 'feet per second squared' },
+	'ft^2': { abbr: 'ft^2', singular: 'square foot', plural: 'square feet' },
+	'ft^3': { abbr: 'ft^3', singular: 'cubic foot', plural: 'cubic feet' },
+	'hm^2': { abbr: 'hm^2', singular: 'square hectometer', plural: 'square hectometers' },
+	'in/s^2': { abbr: 'in/s^2', singular: 'inch per second squared', plural: 'inches per second squared' },
+	'in^2': { abbr: 'in^2', singular: 'square inch', plural: 'square inches' },
+	'in^3': { abbr: 'in^3', singular: 'cubic inch', plural: 'cubic inches' },
+	'km/h': { abbr: 'km/h', singular: 'kilometer per hour', plural: 'kilometers per hour' },
+	'km/h/s': { abbr: 'km/h/s', singular: 'kilometer per hour per second', plural: 'kilometers per hour per second' },
+	'km/s': { abbr: 'km/s', singular: 'kilometer per second', plural: 'kilometers per second' },
+	'km^2': { abbr: 'km^2', singular: 'square kilometer', plural: 'square kilometers' },
+	'm/h': { abbr: 'm/h', singular: 'meter per hour', plural: 'meters per hour' },
+	'm/min': { abbr: 'm/min', singular: 'meter per minute', plural: 'meters per minute' },
+	'm/s': { abbr: 'm/s', singular: 'meter per second', plural: 'meters per second' },
+	'm/s^2': { abbr: 'm/s^2', singular: 'meter per second squared', plural: 'meters per second squared' },
+	'm^2': { abbr: 'm^2', singular: 'square meter', plural: 'square meters' },
+	'm^3': { abbr: 'm^3', singular: 'cubic meter', plural: 'cubic meters' },
+	'mi^2': { abbr: 'mi^2', singular: 'square mile', plural: 'square miles' },
+	'mm^2': { abbr: 'mm^2', singular: 'square millimeter', plural: 'square millimeters' },
+	'mph/s': { abbr: 'mph/s', singular: 'mile per hour per second', plural: 'miles per hour per second' },
+	'um^2': { abbr: 'um^2', singular: 'square micrometer', plural: 'square micrometers' },
+	'yd^2': { abbr: 'yd^2', singular: 'square yard', plural: 'square yards' },
+	'yd^3': { abbr: 'yd^3', singular: 'cubic yard', plural: 'cubic yards' },
+	acre: { abbr: 'ac', singular: 'acre', plural: 'acres' },
+	ang: { abbr: 'angstrom', singular: 'angstrom', plural: 'angstroms' },
+	atm: { abbr: 'atm', singular: 'atmosphere', plural: 'atmospheres' },
+	bar: { abbr: 'bar', singular: 'bar', plural: 'bar' },
+	bit: { abbr: 'bit', singular: 'bit', plural: 'bits' },
+	btu: { abbr: 'BTU', singular: 'British thermal unit', plural: 'British thermal units' },
+	byte: { abbr: 'B', singular: 'byte', plural: 'bytes' },
+	c: { abbr: '°C', singular: 'degree Celsius', plural: 'degrees Celsius' },
+	cal: { abbr: 'cal', singular: 'calorie', plural: 'calories' },
+	cl: { abbr: 'cl', singular: 'centiliter', plural: 'centiliters' },
+	cm: { abbr: 'cm', singular: 'centimeter', plural: 'centimeters' },
+	ct: { abbr: 'ct', singular: 'carat', plural: 'carats' },
 	cup: { abbr: 'cup', singular: 'cup', plural: 'cups' },
+	d: { abbr: 'd', singular: 'day', plural: 'days' },
+	dam: { abbr: 'dam', singular: 'decameter', plural: 'decameters' },
+	dl: { abbr: 'dl', singular: 'deciliter', plural: 'deciliters' },
+	dm: { abbr: 'dm', singular: 'decimeter', plural: 'decimeters' },
+	eb: { abbr: 'EB', singular: 'exabyte', plural: 'exabytes' },
+	eib: { abbr: 'EiB', singular: 'exbibyte', plural: 'exbibytes' },
+	ev: { abbr: 'eV', singular: 'electron volt', plural: 'electron volts' },
+	f: { abbr: '°F', singular: 'degree Fahrenheit', plural: 'degrees Fahrenheit' },
+	ft: { abbr: 'ft', singular: 'foot', plural: 'feet' },
+	fur: { abbr: 'fur', singular: 'furlong', plural: 'furlongs' },
+	g: { abbr: 'g', singular: 'gram', plural: 'grams' },
+	gal: { abbr: 'gal', singular: 'gallon', plural: 'gallons' },
+	gb: { abbr: 'GB', singular: 'gigabyte', plural: 'gigabytes' },
+	gib: { abbr: 'GiB', singular: 'gibibyte', plural: 'gibibytes' },
+	gj: { abbr: 'GJ', singular: 'gigajoule', plural: 'gigajoules' },
+	gw: { abbr: 'GW', singular: 'gigawatt', plural: 'gigawatts' },
+	h: { abbr: 'h', singular: 'hour', plural: 'hours' },
+	ha: { abbr: 'ha', singular: 'hectare', plural: 'hectares' },
+	hm: { abbr: 'hm', singular: 'hectometer', plural: 'hectometers' },
+	hp: { abbr: 'hp', singular: 'horsepower', plural: 'horsepower' },
+	in: { abbr: 'in', singular: 'inch', plural: 'inches' },
+	j: { abbr: 'J', singular: 'joule', plural: 'joules' },
+	k: { abbr: 'K', singular: 'kelvin', plural: 'kelvin' },
+	kb: { abbr: 'KB', singular: 'kilobyte', plural: 'kilobytes' },
+	kcal: { abbr: 'kcal', singular: 'kilocalorie', plural: 'kilocalories' },
+	kg: { abbr: 'kg', singular: 'kilogram', plural: 'kilograms' },
+	kib: { abbr: 'KiB', singular: 'kibibyte', plural: 'kibibytes' },
+	kj: { abbr: 'kJ', singular: 'kilojoule', plural: 'kilojoules' },
+	km: { abbr: 'km', singular: 'kilometer', plural: 'kilometers' },
+	knot: { abbr: 'kt', singular: 'knot', plural: 'knots' },
+	kpa: { abbr: 'kPa', singular: 'kilopascal', plural: 'kilopascals' },
+	kw: { abbr: 'kW', singular: 'kilowatt', plural: 'kilowatts' },
+	kwh: { abbr: 'kWh', singular: 'kilowatt hour', plural: 'kilowatt hours' },
+	l: { abbr: 'L', singular: 'liter', plural: 'liters' },
+	lb: { abbr: 'lb', singular: 'pound', plural: 'pounds' },
+	ly: { abbr: 'ly', singular: 'light year', plural: 'light years' },
+	m: { abbr: 'm', singular: 'meter', plural: 'meters' },
+	mb: { abbr: 'MB', singular: 'megabyte', plural: 'megabytes' },
+	mbar: { abbr: 'mbar', singular: 'millibar', plural: 'millibars' },
+	mcg: { abbr: 'mcg', singular: 'microgram', plural: 'micrograms' },
+	mg: { abbr: 'mg', singular: 'milligram', plural: 'milligrams' },
+	mi: { abbr: 'mi', singular: 'mile', plural: 'miles' },
+	mib: { abbr: 'MiB', singular: 'mebibyte', plural: 'mebibytes' },
+	millijoule: { abbr: 'mJ', singular: 'millijoule', plural: 'millijoules' },
+	milliwatt: { abbr: 'mW', singular: 'milliwatt', plural: 'milliwatts' },
+	min: { abbr: 'min', singular: 'minute', plural: 'minutes' },
+	mj: { abbr: 'MJ', singular: 'megajoule', plural: 'megajoules' },
+	ml: { abbr: 'ml', singular: 'milliliter', plural: 'milliliters' },
+	mm: { abbr: 'mm', singular: 'millimeter', plural: 'millimeters' },
+	mmhg: { abbr: 'mmHg', singular: 'millimeter of mercury', plural: 'millimeters of mercury' },
+	mpa: { abbr: 'MPa', singular: 'megapascal', plural: 'megapascals' },
+	mph: { abbr: 'mph', singular: 'mile per hour', plural: 'miles per hour' },
+	ms: { abbr: 'ms', singular: 'millisecond', plural: 'milliseconds' },
+	mw: { abbr: 'MW', singular: 'megawatt', plural: 'megawatts' },
+	nm: { abbr: 'nm', singular: 'nanometer', plural: 'nanometers' },
+	nmi: { abbr: 'nmi', singular: 'nautical mile', plural: 'nautical miles' },
+	ns: { abbr: 'ns', singular: 'nanosecond', plural: 'nanoseconds' },
+	oz: { abbr: 'oz', singular: 'ounce', plural: 'ounces' },
+	pa: { abbr: 'Pa', singular: 'pascal', plural: 'pascals' },
+	pb: { abbr: 'PB', singular: 'petabyte', plural: 'petabytes' },
+	pc: { abbr: 'pc', singular: 'parsec', plural: 'parsecs' },
+	pib: { abbr: 'PiB', singular: 'pebibyte', plural: 'pebibytes' },
+	psi: { abbr: 'psi', singular: 'pound per square inch', plural: 'pounds per square inch' },
 	pt: { abbr: 'pt', singular: 'pint', plural: 'pints' },
 	qt: { abbr: 'qt', singular: 'quart', plural: 'quarts' },
-	gal: { abbr: 'gal', singular: 'gallon', plural: 'gallons' },
-	'm^3': { abbr: 'm^3', singular: 'cubic meter', plural: 'cubic meters' },
-	'm/s': { abbr: 'm/s', singular: 'meter per second', plural: 'meters per second' },
-	'km/h': { abbr: 'km/h', singular: 'kilometer per hour', plural: 'kilometers per hour' },
-	mph: { abbr: 'mph', singular: 'mile per hour', plural: 'miles per hour' },
-	knot: { abbr: 'kt', singular: 'knot', plural: 'knots' },
-	'ft/s': { abbr: 'ft/s', singular: 'foot per second', plural: 'feet per second' },
-	bit: { abbr: 'bit', singular: 'bit', plural: 'bits' },
-	byte: { abbr: 'B', singular: 'byte', plural: 'bytes' },
-	kb: { abbr: 'KB', singular: 'kilobyte', plural: 'kilobytes' },
-	mb: { abbr: 'MB', singular: 'megabyte', plural: 'megabytes' },
-	gb: { abbr: 'GB', singular: 'gigabyte', plural: 'gigabytes' },
+	r: { abbr: '°R', singular: 'degree Rankine', plural: 'degrees Rankine' },
+	rod: { abbr: 'rod', singular: 'rod', plural: 'rods' },
+	s: { abbr: 's', singular: 'second', plural: 'seconds' },
+	st: { abbr: 'st', singular: 'stone', plural: 'stone' },
 	tb: { abbr: 'TB', singular: 'terabyte', plural: 'terabytes' },
-	pb: { abbr: 'PB', singular: 'petabyte', plural: 'petabytes' },
-	eb: { abbr: 'EB', singular: 'exabyte', plural: 'exabytes' },
-	kib: { abbr: 'KiB', singular: 'kibibyte', plural: 'kibibytes' },
-	mib: { abbr: 'MiB', singular: 'mebibyte', plural: 'mebibytes' },
-	gib: { abbr: 'GiB', singular: 'gibibyte', plural: 'gibibytes' },
+	tbsp: { abbr: 'tbsp', singular: 'tablespoon', plural: 'tablespoons' },
 	tib: { abbr: 'TiB', singular: 'tebibyte', plural: 'tebibytes' },
-	pib: { abbr: 'PiB', singular: 'pebibyte', plural: 'pebibytes' },
-	eib: { abbr: 'EiB', singular: 'exbibyte', plural: 'exbibytes' },
-	c: { abbr: 'C', singular: 'degree Celsius', plural: 'degrees Celsius' },
-	f: { abbr: 'F', singular: 'degree Fahrenheit', plural: 'degrees Fahrenheit' },
-	r: { abbr: 'R', singular: 'degree Rankine', plural: 'degrees Rankine' },
-	k: { abbr: 'K', singular: 'kelvin', plural: 'kelvin' },
+	ton: { abbr: 'ton', singular: 'ton', plural: 'tons' },
+	tonne: { abbr: 't', singular: 'tonne', plural: 'tonnes' },
+	torr: { abbr: 'Torr', singular: 'torr', plural: 'torr' },
+	tsp: { abbr: 'tsp', singular: 'teaspoon', plural: 'teaspoons' },
+	um: { abbr: 'um', singular: 'micrometer', plural: 'micrometers' },
+	us: { abbr: 'us', singular: 'microsecond', plural: 'microseconds' },
+	w: { abbr: 'W', singular: 'watt', plural: 'watts' },
+	wh: { abbr: 'Wh', singular: 'watt hour', plural: 'watt hours' },
+	wk: { abbr: 'wk', singular: 'week', plural: 'weeks' },
+	yd: { abbr: 'yd', singular: 'yard', plural: 'yards' },
+	yr: { abbr: 'yr', singular: 'year', plural: 'years' },
 };
 
 const UNITS = new Map<string, Unit>();
@@ -395,11 +731,11 @@ for (const [alias, canonical] of Object.entries(UNIT_ALIASES)) {
 
 export default class ObsidianUnitsPlugin extends Plugin {
 	settings: ObsidianUnitsSettings = DEFAULT_SETTINGS;
-	private rustEngineReady = false;
+	private livePreviewRenderingField!: StateField<LivePreviewRenderingState>;
 
 	async onload() {
 		await this.loadSettings();
-		await this.initializeRustEngine();
+		this.livePreviewRenderingField = createLivePreviewRenderingField(this);
 
 		this.addRibbonIcon('calculator', 'Convert units on current line', () => {
 			this.convertActiveEditor();
@@ -421,9 +757,17 @@ export default class ObsidianUnitsPlugin extends Plugin {
 			},
 		});
 
+		this.addCommand({
+			id: 'toggle-active-live-preview-rendering',
+			name: 'Toggle rendered calculations in active editor',
+			callback: () => {
+				this.toggleActiveLivePreviewRendering();
+			},
+		});
+
 		this.addSettingTab(new ObsidianUnitsSettingTab(this.app, this));
-		this.registerEditorExtension(createObsidianUnitsLivePreviewExtension(this));
-		this.registerMarkdownPostProcessor((element) => renderInlineCodeConversions(element, this));
+		this.registerEditorExtension([this.livePreviewRenderingField, Prec.highest(createObsidianUnitsLivePreviewExtension(this))]);
+		this.registerMarkdownPostProcessor((element, ctx) => renderInlineCodeConversions(element, ctx, this));
 	}
 
 	async loadSettings() {
@@ -435,33 +779,19 @@ export default class ObsidianUnitsPlugin extends Plugin {
 	}
 
 	evaluateInlineExpression(text: string, variables: VariableMap = new Map()): InlineEvaluation | null {
-		const { expression, mode } = parseInlineRenderMode(text);
-
-		if (this.rustEngineReady) {
-			try {
-				const renderedText = evaluateInlineWithRust(expression, mode, this.settings.precision);
-				return {
-					text: renderedText,
-					consumeTrailingS: renderedText.endsWith('s'),
-				};
-			} catch {
-				// The Rust engine is currently narrower than the TS fallback while the port is in progress.
-			}
-		}
-
 		return evaluateInlineExpressionFallback(text, this.settings.precision, variables);
 	}
 
-	private async initializeRustEngine() {
-		try {
-			const wasmPath = `${this.app.vault.configDir}/plugins/${this.manifest.id}/obsidian_units_core_bg.wasm`;
-			const wasmBuffer = await this.app.vault.adapter.readBinary(wasmPath);
-			await initObsidianUnitsCore(wasmBuffer);
-			this.rustEngineReady = true;
-		} catch (error) {
-			this.rustEngineReady = false;
-			console.warn('Obsidian Units Rust engine unavailable; using TypeScript fallback.', error);
-		}
+	isLivePreviewRenderingEnabled(view: EditorView): boolean {
+		return view.state.field(this.livePreviewRenderingField, false)?.enabled ?? this.settings.renderInLivePreviewByDefault;
+	}
+
+	livePreviewRenderingGeneration(view: EditorView): number {
+		return view.state.field(this.livePreviewRenderingField, false)?.generation ?? 0;
+	}
+
+	livePreviewRenderingChanged(update: ViewUpdate): boolean {
+		return update.startState.field(this.livePreviewRenderingField, false) !== update.state.field(this.livePreviewRenderingField, false);
 	}
 
 	private convertActiveEditor() {
@@ -499,6 +829,61 @@ export default class ObsidianUnitsPlugin extends Plugin {
 
 		editor.replaceSelection(formatResult(conversion, this.settings.precision));
 	}
+
+	private toggleActiveLivePreviewRendering() {
+		const view = this.getActiveEditorView();
+		if (!view) {
+			new Notice('Open a Markdown editor to toggle rendered calculations.');
+			return;
+		}
+
+		const enabled = this.isLivePreviewRenderingEnabled(view);
+		view.dispatch({
+			effects: setLivePreviewRenderingEffect.of(!enabled),
+		});
+		window.requestAnimationFrame(() => {
+			view.dispatch({
+				effects: refreshLivePreviewRenderingEffect.of(null),
+			});
+		});
+	}
+
+	private getActiveEditorView(): EditorView | null {
+		const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+		if (!activeView) {
+			return null;
+		}
+
+		return (activeView.editor as EditorWithCodeMirror).cm ?? null;
+	}
+}
+
+function createLivePreviewRenderingField(plugin: ObsidianUnitsPlugin): StateField<LivePreviewRenderingState> {
+	return StateField.define<LivePreviewRenderingState>({
+		create: () => ({
+			enabled: plugin.settings.renderInLivePreviewByDefault,
+			generation: 0,
+		}),
+		update: (value, transaction) => {
+			for (const effect of transaction.effects) {
+				if (effect.is(setLivePreviewRenderingEffect)) {
+					return {
+						enabled: effect.value,
+						generation: value.generation + 1,
+					};
+				}
+
+				if (effect.is(refreshLivePreviewRenderingEffect)) {
+					return {
+						enabled: value.enabled,
+						generation: value.generation + 1,
+					};
+				}
+			}
+
+			return value;
+		},
+	});
 }
 
 function getExpressionRange(editor: Editor) {
@@ -522,7 +907,7 @@ function getExpressionRange(editor: Editor) {
 
 function parseConversion(text: string): Conversion | null {
 	const cleaned = stripExistingResult(stripInlineCodeMarkers(text.trim()));
-	const match = cleaned.match(/^(-?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)\s+(.+?)\s*(?:->|\bto\b|\bas\b|\bin\b)\s*(.+)$/i);
+	const match = cleaned.match(/^(-?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)\s*(.+?)\s*(?:->|\bto\b|\bas\b|\bin\b)\s*(.+)$/i);
 	if (!match) {
 		return null;
 	}
@@ -576,6 +961,14 @@ function evaluateInlineExpressionFallback(text: string, precision: number, varia
 		};
 	}
 
+	const numericLiteral = formatNumericLiteral(text, precision);
+	if (numericLiteral !== null) {
+		return {
+			text: numericLiteral,
+			consumeTrailingS: false,
+		};
+	}
+
 	const arithmeticResult = parseArithmetic(text, variables);
 	if (arithmeticResult === null) {
 		return null;
@@ -610,7 +1003,8 @@ function normalizeUnit(unit: string): string {
 		.replace(/\bsquare\b/g, 'sq')
 		.replace(/\s+/g, ' ')
 		.replace(/\s*\^\s*/g, '^')
-		.replace(/\s*\/\s*/g, '/');
+		.replace(/\s*\/\s*/g, '/')
+		.replace(/\s*\*\s*/g, '*');
 }
 
 function convert(value: number, source: Unit, target: Unit): number {
@@ -636,14 +1030,18 @@ function formatInlineConversion(inlineConversion: InlineConversion, precision: n
 		case 'value':
 			return formatNumber(conversion.output, precision);
 		case 'unit':
-			return formatUnitName(conversion.target, conversion.output);
+			return formatUnitAbbr(conversion.target);
 		case 'result':
-			return formatResultForSentence(conversion, precision);
+			return formatResultCompact(conversion, precision);
 	}
 }
 
 function formatResult(conversion: Conversion, precision: number): string {
 	return `${formatNumber(conversion.output, precision)} ${formatUnit(conversion.target, conversion.output)}`;
+}
+
+function formatResultCompact(conversion: Conversion, precision: number): string {
+	return `${formatNumber(conversion.output, precision)} ${formatUnitAbbr(conversion.target)}`;
 }
 
 function formatResultForSentence(conversion: Conversion, precision: number): string {
@@ -669,6 +1067,11 @@ function formatUnitName(unit: Unit, value: number): string {
 	return Math.abs(value) === 1 ? display.singular : display.plural;
 }
 
+function formatUnitAbbr(unit: Unit): string {
+	const display = UNIT_DISPLAYS[unit.canonical.toLowerCase()];
+	return display ? display.abbr : unit.canonical;
+}
+
 function formatNumber(value: number, precision: number): string {
 	if (Object.is(value, -0)) {
 		return '0';
@@ -676,6 +1079,27 @@ function formatNumber(value: number, precision: number): string {
 
 	const formatted = value.toFixed(precision);
 	return formatted.replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
+}
+
+function formatNumericLiteral(text: string, precision: number): string | null {
+	const expression = stripArithmeticEquals(stripInlineCodeMarkers(text.trim()));
+	const match = expression.match(/^([+-]?(?:\d+(?:\.(\d*))?|\.(\d+))(?:e[+-]?\d+)?)$/i);
+	if (!match) {
+		return null;
+	}
+
+	const value = Number(match[1]);
+	if (!Number.isFinite(value)) {
+		return null;
+	}
+
+	const decimalPart = match[2] ?? match[3];
+	if (decimalPart === undefined) {
+		return formatNumber(value, precision);
+	}
+
+	const decimalPlaces = Math.min(decimalPart.length, precision);
+	return value.toFixed(decimalPlaces);
 }
 
 function parseArithmetic(text: string, variables: VariableMap = new Map()): number | null {
@@ -707,10 +1131,19 @@ function resolveVariablesInExpression(expression: string, variables: VariableMap
 			.map(escapeRegExp)
 			.join('\\s+');
 		const regex = new RegExp(`(^|[^A-Za-z0-9_])(${pattern})(?=$|[^A-Za-z0-9_])`, 'gi');
-		resolved = resolved.replace(regex, (_match, prefix) => `${prefix}(${formatNumber(value, 12)})`);
+		resolved = resolved.replace(regex, (_match, prefix) => `${prefix}(${formatNumberForExpression(value)})`);
 	}
 
 	return resolved;
+}
+
+function formatNumberForExpression(value: number): string {
+	if (Object.is(value, -0)) {
+		return '0';
+	}
+
+	const formatted = value.toFixed(12);
+	return formatted.replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
 }
 
 function escapeRegExp(value: string): string {
@@ -898,7 +1331,8 @@ function createObsidianUnitsLivePreviewExtension(plugin: ObsidianUnitsPlugin) {
 		}
 
 		update(update: ViewUpdate) {
-			if (update.docChanged || update.viewportChanged || update.selectionSet) {
+			const livePreviewChanged = update.startState.field(editorLivePreviewField, false) !== update.state.field(editorLivePreviewField, false);
+			if (update.docChanged || update.viewportChanged || update.selectionSet || livePreviewChanged || plugin.livePreviewRenderingChanged(update)) {
 				this.decorations = buildInlineCodeDecorations(update.view, plugin);
 			}
 		}
@@ -971,7 +1405,12 @@ function normalizeVariableName(name: string): string {
 }
 
 function buildInlineCodeDecorations(view: EditorView, plugin: ObsidianUnitsPlugin): DecorationSet {
+	if (!view.state.field(editorLivePreviewField, false) || !plugin.isLivePreviewRenderingEnabled(view)) {
+		return Decoration.none;
+	}
+
 	const decorations: Range<Decoration>[] = [];
+	const generation = plugin.livePreviewRenderingGeneration(view);
 
 	for (const range of view.visibleRanges) {
 		const startLine = view.state.doc.lineAt(range.from);
@@ -993,12 +1432,9 @@ function buildInlineCodeDecorations(view: EditorView, plugin: ObsidianUnitsPlugi
 				const localTo = match.index + match[0].length;
 				const shouldConsumeTrailingS = inlineEvaluation.consumeTrailingS && line.text.charAt(localTo) === 's';
 				const pos = line.from + localTo + (shouldConsumeTrailingS ? 1 : 0);
-				if (selectionOverlapsRange(view, from, pos)) {
-					continue;
-				}
 
 				decorations.push(Decoration.replace({
-					widget: new ObsidianUnitsResultWidget(inlineEvaluation.text),
+					widget: new ObsidianUnitsResultWidget(inlineEvaluation.text, generation),
 				}).range(from, pos));
 			}
 		}
@@ -1007,19 +1443,28 @@ function buildInlineCodeDecorations(view: EditorView, plugin: ObsidianUnitsPlugi
 	return Decoration.set(decorations, true);
 }
 
-function selectionOverlapsRange(view: EditorView, from: number, to: number): boolean {
-	return view.state.selection.ranges.some((range) => range.from <= to && range.to >= from);
-}
+async function renderInlineCodeConversions(element: HTMLElement, ctx: MarkdownPostProcessorContext, plugin: ObsidianUnitsPlugin) {
+	const codeElements = Array.from(element.querySelectorAll('code'))
+		.filter((codeElement) => !codeElement.closest('pre'));
+	const sectionInfo = ctx.getSectionInfo(element);
+	const sourceText = await getSourceText(ctx, plugin);
+	const sectionInlineMatches = sectionInfo
+		? Array.from(sectionInfo.text.matchAll(/`([^`\n]+)`/g))
+		: [];
+	const sectionStartOffset = sourceText && sectionInfo
+		? getLineStartOffset(sourceText, sectionInfo.lineStart)
+		: null;
 
-function renderInlineCodeConversions(element: HTMLElement, plugin: ObsidianUnitsPlugin) {
-	for (const codeElement of Array.from(element.querySelectorAll('code'))) {
-		if (codeElement.closest('pre')) {
-			continue;
-		}
+	for (let index = 0; index < codeElements.length; index++) {
+		const codeElement = codeElements[index];
+		const sourceMatch = sectionInlineMatches[index];
+		const variables = sourceText && sectionStartOffset !== null && sourceMatch && sourceMatch.index !== undefined
+			? collectVariables(sourceText.slice(0, sectionStartOffset + sourceMatch.index), plugin.settings.precision)
+			: collectVariables(collectTextBeforeNode(element, codeElement), plugin.settings.precision);
 
 		const inlineEvaluation = plugin.evaluateInlineExpression(
 			codeElement.textContent ?? '',
-			collectVariables(collectTextBeforeNode(element, codeElement), plugin.settings.precision),
+			variables,
 		);
 		if (!inlineEvaluation) {
 			continue;
@@ -1029,12 +1474,37 @@ function renderInlineCodeConversions(element: HTMLElement, plugin: ObsidianUnits
 			consumeNextTextPrefix(codeElement, 's');
 		}
 
-		const result = createSpan({
-			cls: 'obsidian-units-result',
-			text: inlineEvaluation.text,
-		});
+		const result = createResultSpan(inlineEvaluation.text, 'obsidian-units-result');
 		codeElement.replaceWith(result);
 	}
+}
+
+async function getSourceText(ctx: MarkdownPostProcessorContext, plugin: ObsidianUnitsPlugin): Promise<string | null> {
+	const file = plugin.app.vault.getAbstractFileByPath(ctx.sourcePath);
+	if (!(file instanceof TFile)) {
+		return null;
+	}
+
+	try {
+		return await plugin.app.vault.cachedRead(file);
+	} catch {
+		return null;
+	}
+}
+
+function getLineStartOffset(text: string, lineNumber: number): number {
+	let offset = 0;
+
+	for (let line = 0; line < lineNumber; line++) {
+		const nextLine = text.indexOf('\n', offset);
+		if (nextLine === -1) {
+			return text.length;
+		}
+
+		offset = nextLine + 1;
+	}
+
+	return offset;
 }
 
 function collectTextBeforeNode(root: Node, target: Node): string {
@@ -1067,24 +1537,29 @@ function consumeNextTextPrefix(element: HTMLElement, prefix: string) {
 }
 
 class ObsidianUnitsResultWidget extends WidgetType {
-	constructor(private readonly text: string) {
+	constructor(private readonly text: string, private readonly generation: number) {
 		super();
 	}
 
 	toDOM(): HTMLElement {
-		return createSpan({
-			cls: 'obsidian-units-result cm-obsidian-units-result',
-			text: this.text,
-		});
+		return createResultSpan(this.text, 'obsidian-units-result cm-obsidian-units-result');
 	}
 
 	eq(other: ObsidianUnitsResultWidget): boolean {
-		return other.text === this.text;
+		return other.text === this.text && other.generation === this.generation;
 	}
 
 	ignoreEvent(): boolean {
 		return true;
 	}
+}
+
+function createResultSpan(text: string, className: string): HTMLSpanElement {
+	const span = document.createElement('span');
+	span.className = className;
+	span.textContent = text;
+	span.contentEditable = 'false';
+	return span;
 }
 
 class ObsidianUnitsSettingTab extends PluginSettingTab {
@@ -1101,13 +1576,23 @@ class ObsidianUnitsSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Decimal precision')
-			.setDesc('Maximum number of decimal places shown in conversion results.')
+			.setDesc('Number of decimal places shown in rendered results.')
 			.addSlider((slider) => slider
 				.setLimits(0, 10, 1)
 				.setValue(this.plugin.settings.precision)
 				.setDynamicTooltip()
 				.onChange(async (value) => {
 					this.plugin.settings.precision = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('Render in Live Preview by default')
+			.setDesc('New editor panes start with rendered inline results enabled. Use the toggle command to change only the active editor.')
+			.addToggle((toggle) => toggle
+				.setValue(this.plugin.settings.renderInLivePreviewByDefault)
+				.onChange(async (value) => {
+					this.plugin.settings.renderInLivePreviewByDefault = value;
 					await this.plugin.saveSettings();
 				}));
 	}
