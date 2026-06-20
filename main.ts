@@ -836,8 +836,8 @@ export default class ObsidianUnitsPlugin extends Plugin {
 		await this.saveData(this.settings);
 	}
 
-	evaluateInlineExpression(text: string, variables: VariableMap = new Map()): InlineEvaluation | null {
-		return evaluateInlineExpressionFallback(text, this.settings, variables);
+	evaluateInlineExpression(text: string, variables: VariableMap = new Map(), isExplicit = false): InlineEvaluation | null {
+		return evaluateInlineExpressionFallback(text, this.settings, variables, isExplicit);
 	}
 
 	isLivePreviewRenderingEnabled(view: EditorView): boolean {
@@ -892,11 +892,10 @@ export default class ObsidianUnitsPlugin extends Plugin {
 			for (const match of matches) {
 				const matchStart = match.index ?? 0;
 				const matchEnd = matchStart + match[0].length;
-				const variables = collectVariables(
-					fullDoc.slice(0, rangeStartOffset + matchStart),
-					this.settings,
-				);
-				const evaluation = this.evaluateInlineExpression(match[1], variables);
+				const prefixText = fullDoc.slice(0, rangeStartOffset + matchStart);
+				const variables = collectVariables(prefixText, this.settings);
+				const isExplicit = extractAssignmentName(prefixText) !== null;
+				const evaluation = this.evaluateInlineExpression(match[1], variables, isExplicit);
 
 				replacement += range.text.slice(cursor, matchStart);
 				if (evaluation) {
@@ -921,12 +920,11 @@ export default class ObsidianUnitsPlugin extends Plugin {
 			return;
 		}
 
-		const variables = collectVariables(
-			fullDoc.slice(0, rangeStartOffset),
-			this.settings,
-		);
+		const prefixText = fullDoc.slice(0, rangeStartOffset);
+		const variables = collectVariables(prefixText, this.settings);
+		const isExplicit = extractAssignmentName(prefixText) !== null;
 		const trimmed = range.text.trim();
-		const evaluation = this.evaluateInlineExpression(trimmed, variables);
+		const evaluation = this.evaluateInlineExpression(trimmed, variables, isExplicit);
 
 		if (!evaluation) {
 			new Notice(describeEvaluationFailure(trimmed));
@@ -1026,7 +1024,7 @@ function getExpressionRange(editor: Editor) {
 }
 
 function parseConversion(text: string): Conversion | null {
-	const cleaned = stripExistingResult(stripInlineCodeMarkers(text.trim()));
+	const cleaned = stripArithmeticEquals(stripExistingResult(stripInlineCodeMarkers(text.trim())));
 	const match = cleaned.match(/^(-?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)\s*(.+?)\s*(?:->|\bto\b|\bas\b|\bin\b)\s*(.+)$/i);
 	if (!match) {
 		return null;
@@ -1049,7 +1047,7 @@ function parseConversion(text: string): Conversion | null {
 }
 
 function diagnoseConversion(text: string): string | null {
-	const cleaned = stripExistingResult(stripInlineCodeMarkers(text.trim()));
+	const cleaned = stripArithmeticEquals(stripExistingResult(stripInlineCodeMarkers(text.trim())));
 	const match = cleaned.match(/^(-?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)\s*(.+?)\s*(?:->|\bto\b|\bas\b|\bin\b)\s*(.+)$/i);
 	if (!match) {
 		return null;
@@ -1120,7 +1118,7 @@ function parseInlineRenderMode(text: string): { expression: string; mode: Inline
 	};
 }
 
-function evaluateInlineExpressionFallback(text: string, settings: ObsidianUnitsSettings, variables: VariableMap = new Map()): InlineEvaluation | null {
+function evaluateInlineExpressionFallback(text: string, settings: ObsidianUnitsSettings, variables: VariableMap = new Map(), isExplicit = false): InlineEvaluation | null {
 	const inlineConversion = parseInlineConversion(text);
 	if (inlineConversion) {
 		const renderedText = formatInlineConversion(inlineConversion, settings);
@@ -1138,7 +1136,8 @@ function evaluateInlineExpressionFallback(text: string, settings: ObsidianUnitsS
 		};
 	}
 
-	const arithmeticResult = parseArithmetic(text, variables);
+	const arithmeticExplicit = isExplicit || /^\s*=/.test(text);
+	const arithmeticResult = parseArithmetic(text, variables, arithmeticExplicit);
 	if (arithmeticResult === null) {
 		return null;
 	}
@@ -1287,7 +1286,10 @@ function formatNumericLiteral(text: string, precision: number): string | null {
 	return value.toFixed(decimalPlaces);
 }
 
-function parseArithmetic(text: string, variables: VariableMap = new Map()): number | null {
+function parseArithmetic(text: string, variables: VariableMap, isExplicit: boolean): number | null {
+	if (!isExplicit) {
+		return null;
+	}
 	const expression = resolveVariablesInExpression(stripArithmeticEquals(stripInlineCodeMarkers(text.trim())), variables);
 	if (!looksLikeArithmetic(expression)) {
 		return null;
@@ -1299,7 +1301,7 @@ function parseArithmetic(text: string, variables: VariableMap = new Map()): numb
 }
 
 function stripArithmeticEquals(text: string): string {
-	return text.replace(/\s*=\s*$/, '').trim();
+	return text.replace(/^\s*=\s*/, '').replace(/\s*=\s*$/, '').trim();
 }
 
 function looksLikeArithmetic(text: string): boolean {
@@ -1528,7 +1530,7 @@ function createObsidianUnitsLivePreviewExtension(plugin: ObsidianUnitsPlugin) {
 
 function collectVariables(text: string, settings: ObsidianUnitsSettings): VariableMap {
 	const variables: VariableMap = new Map();
-	const rawAssignmentPattern = /^\s*(?:[-*]\s*)?(.+?)\s*(?:=|:|\s-\s)\s*(-?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)(?:\s|$)/i;
+	const rawAssignmentPattern = /^\s*(?:[-*]\s*)?(.+?)\s*=\s*(-?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)(?:\s|$)/i;
 	const inlineCodePattern = /`([^`\n]+)`/g;
 
 	for (const line of text.split('\n')) {
@@ -1544,7 +1546,7 @@ function collectVariables(text: string, settings: ObsidianUnitsSettings): Variab
 				continue;
 			}
 
-			const inlineEvaluation = evaluateInlineExpressionFallback(match[1], settings, variables);
+			const inlineEvaluation = evaluateInlineExpressionFallback(match[1], settings, variables, true);
 			if (!inlineEvaluation) {
 				continue;
 			}
@@ -1567,7 +1569,7 @@ function setVariable(variables: VariableMap, rawName: string, value: number) {
 }
 
 function extractAssignmentName(prefix: string): string | null {
-	const match = prefix.match(/(?:^|\n)\s*(?:[-*]\s*)?(.+?)\s*(?:=|:|\s-\s)\s*$/);
+	const match = prefix.match(/(?:^|\n)\s*(?:[-*]\s*)?(.+?)\s*=\s*$/);
 	return match ? match[1] : null;
 }
 
@@ -1596,6 +1598,7 @@ function buildInlineCodeDecorations(view: EditorView, plugin: ObsidianUnitsPlugi
 
 	const decorations: Range<Decoration>[] = [];
 	const generation = plugin.livePreviewRenderingGeneration(view);
+	const selectionRanges = view.state.selection.ranges;
 
 	for (const range of view.visibleRanges) {
 		const startLine = view.state.doc.lineAt(range.from);
@@ -1609,18 +1612,37 @@ function buildInlineCodeDecorations(view: EditorView, plugin: ObsidianUnitsPlugi
 			while ((match = inlineCodePattern.exec(line.text)) !== null) {
 				const from = line.from + match.index;
 				const variables = collectVariables(view.state.doc.sliceString(0, from), plugin.settings);
-				const inlineEvaluation = plugin.evaluateInlineExpression(match[1], variables);
-				if (!inlineEvaluation) {
+				const isExplicit = extractAssignmentName(line.text.slice(0, match.index)) !== null;
+				const inlineEvaluation = plugin.evaluateInlineExpression(match[1], variables, isExplicit);
+
+				const localTo = match.index + match[0].length;
+				const baseFrom = from;
+				const basePos = line.from + localTo;
+
+				if (selectionRanges.some((s) => s.from <= basePos && s.to >= baseFrom)) {
 					continue;
 				}
 
-				const localTo = match.index + match[0].length;
-				const shouldConsumeTrailingS = inlineEvaluation.consumeTrailingS && line.text.charAt(localTo) === 's';
-				const pos = line.from + localTo + (shouldConsumeTrailingS ? 1 : 0);
+				if (inlineEvaluation) {
+					const shouldConsumeTrailingS = inlineEvaluation.consumeTrailingS && line.text.charAt(localTo) === 's';
+					const pos = basePos + (shouldConsumeTrailingS ? 1 : 0);
 
-				decorations.push(Decoration.replace({
-					widget: new ObsidianUnitsResultWidget(inlineEvaluation.text, generation),
-				}).range(from, pos));
+					if (selectionRanges.some((s) => s.from <= pos && s.to >= baseFrom)) {
+						continue;
+					}
+
+					decorations.push(Decoration.replace({
+						widget: new ObsidianUnitsResultWidget(inlineEvaluation.text, generation),
+					}).range(baseFrom, pos));
+					continue;
+				}
+
+				const diagnosis = diagnoseConversion(match[1]);
+				if (diagnosis) {
+					decorations.push(Decoration.replace({
+						widget: new ObsidianUnitsErrorWidget(diagnosis, generation),
+					}).range(baseFrom, basePos));
+				}
 			}
 		}
 	}
@@ -1643,15 +1665,23 @@ async function renderInlineCodeConversions(element: HTMLElement, ctx: MarkdownPo
 	for (let index = 0; index < codeElements.length; index++) {
 		const codeElement = codeElements[index];
 		const sourceMatch = sectionInlineMatches[index];
-		const variables = sourceText && sectionStartOffset !== null && sourceMatch && sourceMatch.index !== undefined
-			? collectVariables(sourceText.slice(0, sectionStartOffset + sourceMatch.index), plugin.settings)
-			: collectVariables(collectTextBeforeNode(element, codeElement), plugin.settings);
+		const prefixText = sourceText && sectionStartOffset !== null && sourceMatch && sourceMatch.index !== undefined
+			? sourceText.slice(0, sectionStartOffset + sourceMatch.index)
+			: collectTextBeforeNode(element, codeElement);
+		const variables = collectVariables(prefixText, plugin.settings);
+		const isExplicit = extractAssignmentName(prefixText) !== null;
 
+		const codeText = codeElement.textContent ?? '';
 		const inlineEvaluation = plugin.evaluateInlineExpression(
-			codeElement.textContent ?? '',
+			codeText,
 			variables,
+			isExplicit,
 		);
 		if (!inlineEvaluation) {
+			const diagnosis = diagnoseConversion(codeText);
+			if (diagnosis) {
+				codeElement.replaceWith(createResultSpan(diagnosis, 'obsidian-units-error'));
+			}
 			continue;
 		}
 
@@ -1731,6 +1761,24 @@ class ObsidianUnitsResultWidget extends WidgetType {
 	}
 
 	eq(other: ObsidianUnitsResultWidget): boolean {
+		return other.text === this.text && other.generation === this.generation;
+	}
+
+	ignoreEvent(): boolean {
+		return true;
+	}
+}
+
+class ObsidianUnitsErrorWidget extends WidgetType {
+	constructor(private readonly text: string, private readonly generation: number) {
+		super();
+	}
+
+	toDOM(): HTMLElement {
+		return createResultSpan(this.text, 'obsidian-units-error cm-obsidian-units-result');
+	}
+
+	eq(other: ObsidianUnitsErrorWidget): boolean {
 		return other.text === this.text && other.generation === this.generation;
 	}
 
