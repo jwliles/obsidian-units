@@ -7,3 +7,35 @@
 .cm-obsidian-units-result {
 	padding-inline-start: 0.25em;
 }
+
+.obsidian-units-override-search {
+	width: 100%;
+	margin-bottom: 0.5em;
+}
+
+.obsidian-units-override-results,
+.obsidian-units-override-list {
+	display: flex;
+	flex-direction: column;
+	gap: 0.25em;
+	margin-bottom: 1em;
+}
+
+.obsidian-units-override-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 0.5em;
+	padding: 0.25em 0;
+}
+
+.obsidian-units-override-label {
+	flex: 1;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.obsidian-units-override-empty {
+	color: var(--text-muted);
+	font-style: italic;
+}

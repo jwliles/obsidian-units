@@ -2,14 +2,18 @@ import { App, Editor, MarkdownPostProcessorContext, MarkdownView, Notice, Plugin
 import { Prec, Range, StateEffect, StateField } from '@codemirror/state';
 import { Decoration, DecorationSet, EditorView, ViewPlugin, ViewUpdate, WidgetType } from '@codemirror/view';
 
+type UnitDisplayForm = 'abbr' | 'name';
+
 interface ObsidianUnitsSettings {
 	precision: number;
 	renderInLivePreviewByDefault: boolean;
+	unitDisplayOverrides: Record<string, UnitDisplayForm>;
 }
 
 const DEFAULT_SETTINGS: ObsidianUnitsSettings = {
 	precision: 4,
 	renderInLivePreviewByDefault: true,
+	unitDisplayOverrides: {},
 };
 
 type EditorWithCodeMirror = Editor & { cm?: EditorView };
@@ -729,6 +733,60 @@ for (const [alias, canonical] of Object.entries(UNIT_ALIASES)) {
 	}
 }
 
+interface UnitSearchEntry {
+	canonical: string;
+	label: string;
+	dimension: string;
+	searchTokens: string[];
+}
+
+const UNIT_SEARCH_INDEX: UnitSearchEntry[] = (() => {
+	const aliasesByCanonical = new Map<string, string[]>();
+	for (const [alias, canonical] of Object.entries(UNIT_ALIASES)) {
+		const list = aliasesByCanonical.get(canonical) ?? [];
+		list.push(alias);
+		aliasesByCanonical.set(canonical, list);
+	}
+
+	return [...LINEAR_UNITS, ...TEMPERATURE_UNITS].map((unit) => {
+		const display = UNIT_DISPLAYS[unit.canonical.toLowerCase()];
+		const tokens = new Set<string>();
+		tokens.add(unit.canonical.toLowerCase());
+		if (display) {
+			tokens.add(display.abbr.toLowerCase());
+			tokens.add(display.singular.toLowerCase());
+			tokens.add(display.plural.toLowerCase());
+		}
+		for (const alias of aliasesByCanonical.get(unit.canonical) ?? []) {
+			tokens.add(alias.toLowerCase());
+		}
+
+		return {
+			canonical: unit.canonical,
+			label: display ? `${display.plural} (${display.abbr})` : unit.canonical,
+			dimension: unit.dimension,
+			searchTokens: Array.from(tokens),
+		};
+	});
+})();
+
+function searchUnits(query: string, limit = 10): UnitSearchEntry[] {
+	const trimmed = query.trim().toLowerCase();
+	if (!trimmed) {
+		return [];
+	}
+	const results: UnitSearchEntry[] = [];
+	for (const entry of UNIT_SEARCH_INDEX) {
+		if (entry.searchTokens.some((token) => token.includes(trimmed))) {
+			results.push(entry);
+			if (results.length >= limit) {
+				break;
+			}
+		}
+	}
+	return results;
+}
+
 export default class ObsidianUnitsPlugin extends Plugin {
 	settings: ObsidianUnitsSettings = DEFAULT_SETTINGS;
 	private livePreviewRenderingField!: StateField<LivePreviewRenderingState>;
@@ -779,7 +837,7 @@ export default class ObsidianUnitsPlugin extends Plugin {
 	}
 
 	evaluateInlineExpression(text: string, variables: VariableMap = new Map()): InlineEvaluation | null {
-		return evaluateInlineExpressionFallback(text, this.settings.precision, variables);
+		return evaluateInlineExpressionFallback(text, this.settings, variables);
 	}
 
 	isLivePreviewRenderingEnabled(view: EditorView): boolean {
@@ -820,14 +878,62 @@ export default class ObsidianUnitsPlugin extends Plugin {
 
 	private insertResultOnly(editor: Editor) {
 		const range = getExpressionRange(editor);
-		const conversion = parseConversion(range.text);
+		const inlineCodePattern = /`([^`\n]+)`/g;
+		const matches = Array.from(range.text.matchAll(inlineCodePattern));
+		const rangeStartOffset = editor.posToOffset(range.from);
+		const fullDoc = editor.getValue();
 
-		if (!conversion) {
-			new Notice('Could not find a unit conversion like "5 ft to cm".');
+		if (matches.length > 0) {
+			let replacement = '';
+			let cursor = 0;
+			let evaluatedAny = false;
+			let firstFailure: string | null = null;
+
+			for (const match of matches) {
+				const matchStart = match.index ?? 0;
+				const matchEnd = matchStart + match[0].length;
+				const variables = collectVariables(
+					fullDoc.slice(0, rangeStartOffset + matchStart),
+					this.settings,
+				);
+				const evaluation = this.evaluateInlineExpression(match[1], variables);
+
+				replacement += range.text.slice(cursor, matchStart);
+				if (evaluation) {
+					replacement += evaluation.text;
+					evaluatedAny = true;
+				} else {
+					replacement += match[0];
+					if (firstFailure === null) {
+						firstFailure = match[1];
+					}
+				}
+				cursor = matchEnd;
+			}
+			replacement += range.text.slice(cursor);
+
+			if (!evaluatedAny) {
+				new Notice(describeEvaluationFailure(firstFailure));
+				return;
+			}
+
+			editor.replaceRange(replacement, range.from, range.to);
 			return;
 		}
 
-		editor.replaceSelection(formatResult(conversion, this.settings.precision));
+		const variables = collectVariables(
+			fullDoc.slice(0, rangeStartOffset),
+			this.settings,
+		);
+		const trimmed = range.text.trim();
+		const evaluation = this.evaluateInlineExpression(trimmed, variables);
+
+		if (!evaluation) {
+			new Notice(describeEvaluationFailure(trimmed));
+			return;
+		}
+
+		editor.replaceRange(evaluation.text, range.from, range.to);
 	}
 
 	private toggleActiveLivePreviewRendering() {
@@ -855,6 +961,20 @@ export default class ObsidianUnitsPlugin extends Plugin {
 		}
 
 		return (activeView.editor as EditorWithCodeMirror).cm ?? null;
+	}
+
+	refreshAllLivePreviews(): void {
+		this.app.workspace.iterateAllLeaves((leaf) => {
+			if (!(leaf.view instanceof MarkdownView)) {
+				return;
+			}
+			const editorView = (leaf.view.editor as EditorWithCodeMirror).cm;
+			if (editorView) {
+				editorView.dispatch({
+					effects: refreshLivePreviewRenderingEffect.of(null),
+				});
+			}
+		});
 	}
 }
 
@@ -928,6 +1048,55 @@ function parseConversion(text: string): Conversion | null {
 	};
 }
 
+function diagnoseConversion(text: string): string | null {
+	const cleaned = stripExistingResult(stripInlineCodeMarkers(text.trim()));
+	const match = cleaned.match(/^(-?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)\s*(.+?)\s*(?:->|\bto\b|\bas\b|\bin\b)\s*(.+)$/i);
+	if (!match) {
+		return null;
+	}
+
+	const input = Number(match[1]);
+	if (!Number.isFinite(input)) {
+		return `"${match[1]}" is not a valid number.`;
+	}
+
+	const sourceRaw = match[2].trim();
+	const targetRaw = match[3].trim();
+	const source = findUnit(sourceRaw);
+	const target = findUnit(targetRaw);
+
+	if (!source && !target) {
+		return `Unknown units: "${sourceRaw}" and "${targetRaw}".`;
+	}
+	if (!source) {
+		return `Unknown unit: "${sourceRaw}".`;
+	}
+	if (!target) {
+		return `Unknown unit: "${targetRaw}".`;
+	}
+
+	if (source.dimension !== target.dimension) {
+		const pair = new Set([source.dimension, target.dimension]);
+		if (pair.has('mass') && pair.has('volume')) {
+			return `Cannot convert ${source.dimension} (${sourceRaw}) to ${target.dimension} (${targetRaw}) without a density.`;
+		}
+		return `Cannot convert ${source.dimension} (${sourceRaw}) to ${target.dimension} (${targetRaw}); incompatible units.`;
+	}
+
+	return null;
+}
+
+function describeEvaluationFailure(expression: string | null): string {
+	if (!expression) {
+		return 'No inline expression to evaluate on this line.';
+	}
+	const diagnosis = diagnoseConversion(expression);
+	if (diagnosis) {
+		return diagnosis;
+	}
+	return `Couldn't evaluate "${expression}".`;
+}
+
 function parseInlineConversion(text: string): InlineConversion | null {
 	const { expression, mode } = parseInlineRenderMode(text);
 	const conversion = parseConversion(expression);
@@ -951,17 +1120,17 @@ function parseInlineRenderMode(text: string): { expression: string; mode: Inline
 	};
 }
 
-function evaluateInlineExpressionFallback(text: string, precision: number, variables: VariableMap = new Map()): InlineEvaluation | null {
+function evaluateInlineExpressionFallback(text: string, settings: ObsidianUnitsSettings, variables: VariableMap = new Map()): InlineEvaluation | null {
 	const inlineConversion = parseInlineConversion(text);
 	if (inlineConversion) {
-		const renderedText = formatInlineConversion(inlineConversion, precision);
+		const renderedText = formatInlineConversion(inlineConversion, settings);
 		return {
 			text: renderedText,
 			consumeTrailingS: renderedText.endsWith('s'),
 		};
 	}
 
-	const numericLiteral = formatNumericLiteral(text, precision);
+	const numericLiteral = formatNumericLiteral(text, settings.precision);
 	if (numericLiteral !== null) {
 		return {
 			text: numericLiteral,
@@ -975,7 +1144,7 @@ function evaluateInlineExpressionFallback(text: string, precision: number, varia
 	}
 
 	return {
-		text: formatNumber(arithmeticResult, precision),
+		text: formatNumber(arithmeticResult, settings.precision),
 		consumeTrailingS: false,
 	};
 }
@@ -1023,29 +1192,21 @@ function formatConversion(conversion: Conversion, precision: number): string {
 	return `${conversion.input} ${formatUnit(conversion.source, conversion.input)} = ${formatResult(conversion, precision)}`;
 }
 
-function formatInlineConversion(inlineConversion: InlineConversion, precision: number): string {
+function formatInlineConversion(inlineConversion: InlineConversion, settings: ObsidianUnitsSettings): string {
 	const { conversion, mode } = inlineConversion;
 
 	switch (mode) {
 		case 'value':
-			return formatNumber(conversion.output, precision);
+			return formatNumber(conversion.output, settings.precision);
 		case 'unit':
-			return formatUnitAbbr(conversion.target);
+			return pickUnitForm(conversion.target, conversion.output, settings);
 		case 'result':
-			return formatResultCompact(conversion, precision);
+			return `${formatNumber(conversion.output, settings.precision)} ${pickUnitForm(conversion.target, conversion.output, settings)}`;
 	}
 }
 
 function formatResult(conversion: Conversion, precision: number): string {
 	return `${formatNumber(conversion.output, precision)} ${formatUnit(conversion.target, conversion.output)}`;
-}
-
-function formatResultCompact(conversion: Conversion, precision: number): string {
-	return `${formatNumber(conversion.output, precision)} ${formatUnitAbbr(conversion.target)}`;
-}
-
-function formatResultForSentence(conversion: Conversion, precision: number): string {
-	return `${formatNumber(conversion.output, precision)} ${formatUnitName(conversion.target, conversion.output)}`;
 }
 
 function formatUnit(unit: Unit, value: number): string {
@@ -1070,6 +1231,30 @@ function formatUnitName(unit: Unit, value: number): string {
 function formatUnitAbbr(unit: Unit): string {
 	const display = UNIT_DISPLAYS[unit.canonical.toLowerCase()];
 	return display ? display.abbr : unit.canonical;
+}
+
+const ABBR_PREFERRED = new Set([
+	'mph', 'psi', 'btu',
+	'kb', 'mb', 'gb', 'tb', 'pb', 'eb',
+	'kib', 'mib', 'gib', 'tib', 'pib', 'eib',
+]);
+
+function resolveUnitDisplayForm(canonical: string, settings: ObsidianUnitsSettings): UnitDisplayForm {
+	const override = settings.unitDisplayOverrides[canonical];
+	if (override) {
+		return override;
+	}
+	const lower = canonical.toLowerCase();
+	if (/[\/^*]/.test(canonical) || ABBR_PREFERRED.has(lower)) {
+		return 'abbr';
+	}
+	return 'name';
+}
+
+function pickUnitForm(unit: Unit, value: number, settings: ObsidianUnitsSettings): string {
+	return resolveUnitDisplayForm(unit.canonical, settings) === 'abbr'
+		? formatUnitAbbr(unit)
+		: formatUnitName(unit, value);
 }
 
 function formatNumber(value: number, precision: number): string {
@@ -1341,7 +1526,7 @@ function createObsidianUnitsLivePreviewExtension(plugin: ObsidianUnitsPlugin) {
 	});
 }
 
-function collectVariables(text: string, precision: number): VariableMap {
+function collectVariables(text: string, settings: ObsidianUnitsSettings): VariableMap {
 	const variables: VariableMap = new Map();
 	const rawAssignmentPattern = /^\s*(?:[-*]\s*)?(.+?)\s*(?:=|:|\s-\s)\s*(-?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)(?:\s|$)/i;
 	const inlineCodePattern = /`([^`\n]+)`/g;
@@ -1359,7 +1544,7 @@ function collectVariables(text: string, precision: number): VariableMap {
 				continue;
 			}
 
-			const inlineEvaluation = evaluateInlineExpressionFallback(match[1], precision, variables);
+			const inlineEvaluation = evaluateInlineExpressionFallback(match[1], settings, variables);
 			if (!inlineEvaluation) {
 				continue;
 			}
@@ -1423,7 +1608,7 @@ function buildInlineCodeDecorations(view: EditorView, plugin: ObsidianUnitsPlugi
 
 			while ((match = inlineCodePattern.exec(line.text)) !== null) {
 				const from = line.from + match.index;
-				const variables = collectVariables(view.state.doc.sliceString(0, from), plugin.settings.precision);
+				const variables = collectVariables(view.state.doc.sliceString(0, from), plugin.settings);
 				const inlineEvaluation = plugin.evaluateInlineExpression(match[1], variables);
 				if (!inlineEvaluation) {
 					continue;
@@ -1459,8 +1644,8 @@ async function renderInlineCodeConversions(element: HTMLElement, ctx: MarkdownPo
 		const codeElement = codeElements[index];
 		const sourceMatch = sectionInlineMatches[index];
 		const variables = sourceText && sectionStartOffset !== null && sourceMatch && sourceMatch.index !== undefined
-			? collectVariables(sourceText.slice(0, sectionStartOffset + sourceMatch.index), plugin.settings.precision)
-			: collectVariables(collectTextBeforeNode(element, codeElement), plugin.settings.precision);
+			? collectVariables(sourceText.slice(0, sectionStartOffset + sourceMatch.index), plugin.settings)
+			: collectVariables(collectTextBeforeNode(element, codeElement), plugin.settings);
 
 		const inlineEvaluation = plugin.evaluateInlineExpression(
 			codeElement.textContent ?? '',
@@ -1595,5 +1780,90 @@ class ObsidianUnitsSettingTab extends PluginSettingTab {
 					this.plugin.settings.renderInLivePreviewByDefault = value;
 					await this.plugin.saveSettings();
 				}));
+
+		this.renderUnitDisplayOverrideSection(containerEl);
+	}
+
+	private renderUnitDisplayOverrideSection(containerEl: HTMLElement): void {
+		new Setting(containerEl)
+			.setName('Unit display overrides')
+			.setDesc('Search for a unit and pick whether to render its abbreviation (cm) or full name (centimeters). Defaults work for most cases — compound units stay short, simple units expand.')
+			.setHeading();
+
+		const searchEl = containerEl.createEl('input', {
+			type: 'search',
+			cls: 'obsidian-units-override-search',
+			attr: { placeholder: 'Search units (e.g. meter, cm, mph)…' },
+		});
+		const resultsEl = containerEl.createDiv({ cls: 'obsidian-units-override-results' });
+		containerEl.createEl('h4', { text: 'Your overrides' });
+		const overridesEl = containerEl.createDiv({ cls: 'obsidian-units-override-list' });
+
+		const renderResults = () => {
+			resultsEl.empty();
+			const matches = searchUnits(searchEl.value, 10);
+			if (matches.length === 0) {
+				return;
+			}
+			for (const entry of matches) {
+				this.renderOverrideRow(resultsEl, entry, renderOverrides);
+			}
+		};
+
+		const renderOverrides = () => {
+			overridesEl.empty();
+			const entries = Object.entries(this.plugin.settings.unitDisplayOverrides);
+			if (entries.length === 0) {
+				overridesEl.createDiv({ text: 'No overrides yet.', cls: 'obsidian-units-override-empty' });
+				return;
+			}
+			for (const [canonical, form] of entries) {
+				this.renderOverrideListItem(overridesEl, canonical, form, () => {
+					renderOverrides();
+					renderResults();
+				});
+			}
+		};
+
+		searchEl.addEventListener('input', renderResults);
+		renderOverrides();
+	}
+
+	private renderOverrideRow(parent: HTMLElement, entry: UnitSearchEntry, onChange: () => void): void {
+		const row = parent.createDiv({ cls: 'obsidian-units-override-row' });
+		row.createSpan({ text: entry.label, cls: 'obsidian-units-override-label' });
+
+		const select = row.createEl('select', { cls: 'obsidian-units-override-select' });
+		select.createEl('option', { text: 'Default', value: '' });
+		select.createEl('option', { text: 'Abbreviation', value: 'abbr' });
+		select.createEl('option', { text: 'Full name', value: 'name' });
+		select.value = this.plugin.settings.unitDisplayOverrides[entry.canonical] ?? '';
+
+		select.addEventListener('change', async () => {
+			if (select.value === '') {
+				delete this.plugin.settings.unitDisplayOverrides[entry.canonical];
+			} else {
+				this.plugin.settings.unitDisplayOverrides[entry.canonical] = select.value as UnitDisplayForm;
+			}
+			await this.plugin.saveSettings();
+			this.plugin.refreshAllLivePreviews();
+			onChange();
+		});
+	}
+
+	private renderOverrideListItem(parent: HTMLElement, canonical: string, form: UnitDisplayForm, onChange: () => void): void {
+		const display = UNIT_DISPLAYS[canonical.toLowerCase()];
+		const name = display ? display.plural : canonical;
+		const formLabel = form === 'abbr' ? 'abbreviation' : 'full name';
+
+		const row = parent.createDiv({ cls: 'obsidian-units-override-row' });
+		row.createSpan({ text: `${name} → ${formLabel}`, cls: 'obsidian-units-override-label' });
+		const revertBtn = row.createEl('button', { text: 'Revert', cls: 'obsidian-units-override-revert' });
+		revertBtn.addEventListener('click', async () => {
+			delete this.plugin.settings.unitDisplayOverrides[canonical];
+			await this.plugin.saveSettings();
+			this.plugin.refreshAllLivePreviews();
+			onChange();
+		});
 	}
 }
