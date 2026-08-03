@@ -44,3 +44,14 @@
 	color: var(--text-muted);
 	font-style: italic;
 }
+
+.obsidian-units-density-list {
+	display: flex;
+	flex-direction: column;
+	gap: 0.25em;
+	margin-bottom: 0.75em;
+}
+
+.obsidian-units-density-add {
+	margin-bottom: 1em;
+}

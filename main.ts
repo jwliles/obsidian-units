@@ -1,20 +1,30 @@
-import { App, Editor, MarkdownPostProcessorContext, MarkdownView, Notice, Plugin, PluginSettingTab, Setting, TFile, editorLivePreviewField } from 'obsidian';
+import { App, Editor, MarkdownPostProcessorContext, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, editorLivePreviewField } from 'obsidian';
 import { Prec, Range, StateEffect, StateField } from '@codemirror/state';
 import { Decoration, DecorationSet, EditorView, ViewPlugin, ViewUpdate, WidgetType } from '@codemirror/view';
 
 type UnitDisplayForm = 'abbr' | 'name';
 
+interface DensityEntry {
+	name: string;
+	value: number;
+	unit: string;
+}
+
 interface ObsidianUnitsSettings {
 	precision: number;
 	renderInLivePreviewByDefault: boolean;
 	unitDisplayOverrides: Record<string, UnitDisplayForm>;
+	densities: DensityEntry[];
 }
 
 const DEFAULT_SETTINGS: ObsidianUnitsSettings = {
 	precision: 4,
 	renderInLivePreviewByDefault: true,
 	unitDisplayOverrides: {},
+	densities: [],
 };
+
+const DENSITY_UNIT_OPTIONS = ['g/ml', 'kg/m^3', 'lb/ft^3', 'oz/fl oz'];
 
 type EditorWithCodeMirror = Editor & { cm?: EditorView };
 interface LivePreviewRenderingState {
@@ -864,7 +874,7 @@ export default class ObsidianUnitsPlugin extends Plugin {
 
 	private convertEditorExpression(editor: Editor) {
 		const range = getExpressionRange(editor);
-		const conversion = parseConversion(range.text);
+		const conversion = parseConversion(range.text, this.settings);
 
 		if (!conversion) {
 			new Notice('Could not find a unit conversion like "5 ft to cm".');
@@ -912,7 +922,7 @@ export default class ObsidianUnitsPlugin extends Plugin {
 			replacement += range.text.slice(cursor);
 
 			if (!evaluatedAny) {
-				new Notice(describeEvaluationFailure(firstFailure));
+				new Notice(describeEvaluationFailure(firstFailure, this.settings));
 				return;
 			}
 
@@ -927,7 +937,7 @@ export default class ObsidianUnitsPlugin extends Plugin {
 		const evaluation = this.evaluateInlineExpression(trimmed, variables, isExplicit);
 
 		if (!evaluation) {
-			new Notice(describeEvaluationFailure(trimmed));
+			new Notice(describeEvaluationFailure(trimmed, this.settings));
 			return;
 		}
 
@@ -1023,32 +1033,53 @@ function getExpressionRange(editor: Editor) {
 	};
 }
 
-function parseConversion(text: string): Conversion | null {
+const CONVERSION_PATTERN = /^(-?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)\s*(.+?)(?:\s+of\s+(.+?))?\s*(?:->|\bto\b|\bas\b|\bin\b)\s*(.+)$/i;
+
+function parseConversion(text: string, settings: ObsidianUnitsSettings): Conversion | null {
 	const cleaned = stripArithmeticEquals(stripExistingResult(stripInlineCodeMarkers(text.trim())));
-	const match = cleaned.match(/^(-?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)\s*(.+?)\s*(?:->|\bto\b|\bas\b|\bin\b)\s*(.+)$/i);
+	const match = cleaned.match(CONVERSION_PATTERN);
 	if (!match) {
 		return null;
 	}
 
 	const input = Number(match[1]);
 	const source = findUnit(match[2]);
-	const target = findUnit(match[3]);
+	const materialName = match[3];
+	const target = findUnit(match[4]);
 
-	if (!Number.isFinite(input) || !source || !target || source.dimension !== target.dimension) {
+	if (!Number.isFinite(input) || !source || !target) {
 		return null;
 	}
 
-	return {
-		input,
-		source,
-		target,
-		output: convert(input, source, target),
-	};
+	if (source.dimension === target.dimension) {
+		return {
+			input,
+			source,
+			target,
+			output: convert(input, source, target),
+		};
+	}
+
+	if (!isMassVolumePair(source.dimension, target.dimension) || !materialName) {
+		return null;
+	}
+
+	const density = findDensity(materialName, settings);
+	if (!density) {
+		return null;
+	}
+
+	const output = convertWithDensity(input, source, target, density);
+	if (!Number.isFinite(output)) {
+		return null;
+	}
+
+	return { input, source, target, output };
 }
 
-function diagnoseConversion(text: string): string | null {
+function diagnoseConversion(text: string, settings: ObsidianUnitsSettings): string | null {
 	const cleaned = stripArithmeticEquals(stripExistingResult(stripInlineCodeMarkers(text.trim())));
-	const match = cleaned.match(/^(-?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)\s*(.+?)\s*(?:->|\bto\b|\bas\b|\bin\b)\s*(.+)$/i);
+	const match = cleaned.match(CONVERSION_PATTERN);
 	if (!match) {
 		return null;
 	}
@@ -1059,7 +1090,8 @@ function diagnoseConversion(text: string): string | null {
 	}
 
 	const sourceRaw = match[2].trim();
-	const targetRaw = match[3].trim();
+	const materialRaw = match[3]?.trim();
+	const targetRaw = match[4].trim();
 	const source = findUnit(sourceRaw);
 	const target = findUnit(targetRaw);
 
@@ -1073,31 +1105,38 @@ function diagnoseConversion(text: string): string | null {
 		return `Unknown unit: "${targetRaw}".`;
 	}
 
-	if (source.dimension !== target.dimension) {
-		const pair = new Set([source.dimension, target.dimension]);
-		if (pair.has('mass') && pair.has('volume')) {
-			return `Cannot convert ${source.dimension} (${sourceRaw}) to ${target.dimension} (${targetRaw}) without a density.`;
-		}
-		return `Cannot convert ${source.dimension} (${sourceRaw}) to ${target.dimension} (${targetRaw}); incompatible units.`;
+	if (source.dimension === target.dimension) {
+		return null;
 	}
 
-	return null;
+	if (isMassVolumePair(source.dimension, target.dimension)) {
+		if (!materialRaw) {
+			return `Cannot convert ${source.dimension} (${sourceRaw}) to ${target.dimension} (${targetRaw}) without a material. Try: ${source.dimension} (${sourceRaw}) of <material> to ${target.dimension} (${targetRaw}).`;
+		}
+		const density = findDensity(materialRaw, settings);
+		if (!density) {
+			return `Unknown material: "${materialRaw}". Add it in Settings → Obsidian Units → Material densities.`;
+		}
+		return null;
+	}
+
+	return `Cannot convert ${source.dimension} (${sourceRaw}) to ${target.dimension} (${targetRaw}); incompatible units.`;
 }
 
-function describeEvaluationFailure(expression: string | null): string {
+function describeEvaluationFailure(expression: string | null, settings: ObsidianUnitsSettings): string {
 	if (!expression) {
 		return 'No inline expression to evaluate on this line.';
 	}
-	const diagnosis = diagnoseConversion(expression);
+	const diagnosis = diagnoseConversion(expression, settings);
 	if (diagnosis) {
 		return diagnosis;
 	}
 	return `Couldn't evaluate "${expression}".`;
 }
 
-function parseInlineConversion(text: string): InlineConversion | null {
+function parseInlineConversion(text: string, settings: ObsidianUnitsSettings): InlineConversion | null {
 	const { expression, mode } = parseInlineRenderMode(text);
-	const conversion = parseConversion(expression);
+	const conversion = parseConversion(expression, settings);
 
 	if (!conversion) {
 		return null;
@@ -1119,7 +1158,7 @@ function parseInlineRenderMode(text: string): { expression: string; mode: Inline
 }
 
 function evaluateInlineExpressionFallback(text: string, settings: ObsidianUnitsSettings, variables: VariableMap = new Map(), isExplicit = false): InlineEvaluation | null {
-	const inlineConversion = parseInlineConversion(text);
+	const inlineConversion = parseInlineConversion(text, settings);
 	if (inlineConversion) {
 		const renderedText = formatInlineConversion(inlineConversion, settings);
 		return {
@@ -1185,6 +1224,68 @@ function convert(value: number, source: Unit, target: Unit): number {
 	}
 
 	throw new Error('Cannot convert between incompatible unit kinds.');
+}
+
+function isMassVolumePair(a: string, b: string): boolean {
+	return (a === 'mass' && b === 'volume') || (a === 'volume' && b === 'mass');
+}
+
+function normalizeMaterialName(name: string): string {
+	return name.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function findDensity(rawName: string, settings: ObsidianUnitsSettings): DensityEntry | null {
+	const normalized = normalizeMaterialName(rawName);
+	if (!normalized) {
+		return null;
+	}
+	for (const entry of settings.densities) {
+		if (normalizeMaterialName(entry.name) === normalized) {
+			return entry;
+		}
+	}
+	return null;
+}
+
+function densityToBase(density: DensityEntry): number {
+	const slashIdx = density.unit.indexOf('/');
+	if (slashIdx < 0) {
+		return NaN;
+	}
+	const massUnit = findUnit(density.unit.slice(0, slashIdx));
+	const volUnit = findUnit(density.unit.slice(slashIdx + 1));
+	if (!massUnit || !volUnit) {
+		return NaN;
+	}
+	if (massUnit.dimension !== 'mass' || volUnit.dimension !== 'volume') {
+		return NaN;
+	}
+	if (massUnit.kind !== 'linear' || volUnit.kind !== 'linear') {
+		return NaN;
+	}
+	return (density.value * massUnit.toBase) / volUnit.toBase;
+}
+
+function convertWithDensity(value: number, source: Unit, target: Unit, density: DensityEntry): number {
+	if (source.kind !== 'linear' || target.kind !== 'linear') {
+		return NaN;
+	}
+	const densityGramsPerLiter = densityToBase(density);
+	if (!Number.isFinite(densityGramsPerLiter) || densityGramsPerLiter <= 0) {
+		return NaN;
+	}
+
+	if (source.dimension === 'volume' && target.dimension === 'mass') {
+		const volumeL = value * source.toBase;
+		const massG = volumeL * densityGramsPerLiter;
+		return massG / target.toBase;
+	}
+	if (source.dimension === 'mass' && target.dimension === 'volume') {
+		const massG = value * source.toBase;
+		const volumeL = massG / densityGramsPerLiter;
+		return volumeL / target.toBase;
+	}
+	return NaN;
 }
 
 function formatConversion(conversion: Conversion, precision: number): string {
@@ -1340,7 +1441,7 @@ function escapeRegExp(value: string): string {
 class ArithmeticParser {
 	private index = 0;
 
-	constructor(private readonly input: string) {}
+	constructor(private readonly input: string) { }
 
 	parse(): number | null {
 		const value = this.parseExpression();
@@ -1637,7 +1738,7 @@ function buildInlineCodeDecorations(view: EditorView, plugin: ObsidianUnitsPlugi
 					continue;
 				}
 
-				const diagnosis = diagnoseConversion(match[1]);
+				const diagnosis = diagnoseConversion(match[1], plugin.settings);
 				if (diagnosis) {
 					decorations.push(Decoration.replace({
 						widget: new ObsidianUnitsErrorWidget(diagnosis, generation),
@@ -1678,7 +1779,7 @@ async function renderInlineCodeConversions(element: HTMLElement, ctx: MarkdownPo
 			isExplicit,
 		);
 		if (!inlineEvaluation) {
-			const diagnosis = diagnoseConversion(codeText);
+			const diagnosis = diagnoseConversion(codeText, plugin.settings);
 			if (diagnosis) {
 				codeElement.replaceWith(createResultSpan(diagnosis, 'obsidian-units-error'));
 			}
@@ -1830,6 +1931,7 @@ class ObsidianUnitsSettingTab extends PluginSettingTab {
 				}));
 
 		this.renderUnitDisplayOverrideSection(containerEl);
+		this.renderDensitiesSection(containerEl);
 	}
 
 	private renderUnitDisplayOverrideSection(containerEl: HTMLElement): void {
@@ -1913,5 +2015,136 @@ class ObsidianUnitsSettingTab extends PluginSettingTab {
 			this.plugin.refreshAllLivePreviews();
 			onChange();
 		});
+	}
+
+	private renderDensitiesSection(containerEl: HTMLElement): void {
+		new Setting(containerEl)
+			.setName('Material densities')
+			.setDesc('Densities let the plugin convert between mass and volume for specific materials (e.g. `1 tsp of maple syrup to g`). Densities are user-defined — see the README for the data format.')
+			.setHeading();
+
+		const listEl = containerEl.createDiv({ cls: 'obsidian-units-density-list' });
+
+		const renderList = () => {
+			listEl.empty();
+			if (this.plugin.settings.densities.length === 0) {
+				listEl.createDiv({ text: 'No densities yet.', cls: 'obsidian-units-override-empty' });
+				return;
+			}
+			this.plugin.settings.densities.forEach((entry, index) => {
+				const row = listEl.createDiv({ cls: 'obsidian-units-override-row' });
+				row.createSpan({
+					text: `${entry.name} — ${entry.value} ${entry.unit}`,
+					cls: 'obsidian-units-override-label',
+				});
+				const editBtn = row.createEl('button', { text: 'Edit' });
+				editBtn.addEventListener('click', () => {
+					new DensityModal(this.app, entry, async (updated) => {
+						this.plugin.settings.densities[index] = updated;
+						await this.plugin.saveSettings();
+						this.plugin.refreshAllLivePreviews();
+						renderList();
+					}).open();
+				});
+				const deleteBtn = row.createEl('button', { text: 'Delete' });
+				deleteBtn.addEventListener('click', async () => {
+					this.plugin.settings.densities.splice(index, 1);
+					await this.plugin.saveSettings();
+					this.plugin.refreshAllLivePreviews();
+					renderList();
+				});
+			});
+		};
+
+		const addBtn = containerEl.createEl('button', {
+			text: 'Add density',
+			cls: 'obsidian-units-density-add',
+		});
+		addBtn.addEventListener('click', () => {
+			new DensityModal(this.app, null, async (entry) => {
+				this.plugin.settings.densities.push(entry);
+				await this.plugin.saveSettings();
+				this.plugin.refreshAllLivePreviews();
+				renderList();
+			}).open();
+		});
+
+		renderList();
+	}
+}
+
+class DensityModal extends Modal {
+	private name: string;
+	private value: number;
+	private unit: string;
+
+	constructor(
+		app: App,
+		existing: DensityEntry | null,
+		private readonly onSubmit: (entry: DensityEntry) => void | Promise<void>,
+	) {
+		super(app);
+		this.name = existing?.name ?? '';
+		this.value = existing?.value ?? 1;
+		this.unit = existing?.unit ?? DENSITY_UNIT_OPTIONS[0];
+	}
+
+	onOpen(): void {
+		const { contentEl } = this;
+		contentEl.createEl('h3', { text: this.name ? 'Edit density' : 'Add density' });
+
+		new Setting(contentEl)
+			.setName('Material name')
+			.setDesc('How you will refer to this material in expressions, e.g. "maple syrup".')
+			.addText((text) => text
+				.setPlaceholder('maple syrup')
+				.setValue(this.name)
+				.onChange((value) => { this.name = value; }));
+
+		new Setting(contentEl)
+			.setName('Density value')
+			.addText((text) => text
+				.setValue(String(this.value))
+				.onChange((value) => {
+					const parsed = Number(value);
+					if (Number.isFinite(parsed)) {
+						this.value = parsed;
+					}
+				}));
+
+		new Setting(contentEl)
+			.setName('Density unit')
+			.addDropdown((dropdown) => {
+				for (const option of DENSITY_UNIT_OPTIONS) {
+					dropdown.addOption(option, option);
+				}
+				dropdown.setValue(this.unit);
+				dropdown.onChange((value) => { this.unit = value; });
+			});
+
+		new Setting(contentEl)
+			.addButton((btn) => btn
+				.setButtonText('Save')
+				.setCta()
+				.onClick(async () => {
+					const name = this.name.trim();
+					if (!name) {
+						new Notice('Material name is required.');
+						return;
+					}
+					if (!Number.isFinite(this.value) || this.value <= 0) {
+						new Notice('Density value must be a positive number.');
+						return;
+					}
+					await this.onSubmit({ name, value: this.value, unit: this.unit });
+					this.close();
+				}))
+			.addButton((btn) => btn
+				.setButtonText('Cancel')
+				.onClick(() => this.close()));
+	}
+
+	onClose(): void {
+		this.contentEl.empty();
 	}
 }

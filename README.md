@@ -106,6 +106,55 @@ You can also select an expression inside a larger line and convert only the sele
 
 The `conversions.tsv` file is a planning/reference list for future category expansion. Runtime conversion is handled by TypeScript unit tables that convert through one base unit per category.
 
+## Material densities (mass ↔ volume)
+
+Mass and volume are different dimensions, so a conversion like `1 tsp to g` is incomplete — the answer depends on what's in the teaspoon. Once you teach the plugin a material's density, expressions like the following work in either direction:
+
+```text
+`1 tsp of maple syrup to g`     → 6.7503 grams
+`100 g of maple syrup to ml`    → 72.993 milliliters
+```
+
+The keyword `of <material>` appears between the source unit and `to`/`as`/`in`/`->`. The material name can contain spaces and is matched case-insensitively. Mismatched dimensions other than mass ↔ volume are still rejected (the plugin does not bridge volume → length, etc.).
+
+### Adding a density via the UI
+
+In **Settings → Obsidian Units → Material densities**, click **Add density**. The modal collects three fields:
+
+- **Material name** — how you'll refer to the material in expressions.
+- **Density value** — the numeric density.
+- **Density unit** — pick from `g/ml`, `kg/m^3`, `lb/ft^3`, or `oz/fl oz`.
+
+Edit or delete existing entries from the same screen. Changes take effect immediately in open Live Preview panes.
+
+### Hand-editing the data file
+
+Densities are persisted in the plugin's `data.json` (alongside other settings). The shape is:
+
+```json
+{
+  "densities": [
+    { "name": "maple syrup", "value": 1.37, "unit": "g/ml" },
+    { "name": "olive oil",   "value": 0.91, "unit": "g/ml" }
+  ]
+}
+```
+
+Reference values (for copying):
+
+| Material         | Density (g/mL) |
+| ---------------- | -------------- |
+| Water            | 1.00           |
+| Whole milk       | 1.03           |
+| Butter           | 0.91           |
+| All-purpose flour (sifted) | 0.53 |
+| Granulated sugar | 0.85           |
+| Honey            | 1.42           |
+| Maple syrup      | 1.37           |
+| Olive oil        | 0.91           |
+
+Flour density varies a lot with packing — adjust to your own measurement.
+
 ## Development
 
 ```bash
