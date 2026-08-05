@@ -4,10 +4,7 @@
 
 This document describes a proposed syntax and behavior for explicit calculations, grouped values, and aggregate functions in Obsidian Units. It is a design proposal, not documentation for an implemented feature.
 
-The proposal contains two intentional breaking syntax changes:
-
-1. Every Obsidian Units inline expression must begin with `=`.
-2. Named declarations use `:` instead of `=` between the name and inline expression.
+The proposal contains one intentional breaking syntax change: every Obsidian Units inline expression must begin with `=`. Named declarations retain `=` between the declaration prefix and inline expression.
 
 Existing notes must therefore be migrated. For example:
 
@@ -17,13 +14,13 @@ CPI = `330.30`
 ratio = `CPI / 299.97`
 
 <!-- Proposed syntax -->
-CPI: `=330.30`
-ratio: `=CPI / 299.97`
+CPI = `=330.30`
+ratio = `=CPI / 299.97`
 ```
 
 ## Compatibility impact
 
-The two syntax breaks have several related behavioral consequences.
+The explicit-expression syntax break has several related behavioral consequences.
 
 ### Implicit conversions and numeric expressions
 
@@ -43,11 +40,15 @@ Existing conversion expressions must therefore be migrated even when they are no
 
 An explicit expression that cannot be evaluated is an error, not ordinary inline code. This changes failure behavior intentionally: invalid expressions that previously remained visibly unchanged should instead render a diagnostic.
 
-### Reserved colon syntax
+### Declaration and colon syntax
 
-The colon becomes structural when it appears in a declaration prefix. It separates a label from chained group sigils and terminates the declaration when followed by whitespace and an explicit inline expression.
+A declaration uses whitespace-surrounded `=` immediately before an explicit inline expression. The text to its left is the declaration prefix. Within that prefix, colons attach group sigils to the label:
 
-Labels that contain literal colons may therefore be ambiguous. The first implementation should either reject such labels with a useful error or define an escaping mechanism before treating them as valid declarations.
+```markdown
+pay day:ic = `=645.24`
+```
+
+Whitespace may occur inside a label, but not inside a sigil. After trimming the declaration prefix, `=` must be the next non-whitespace token after the label or final sigil. A label must not contain `=` because it is the declaration delimiter. Labels that contain literal colons are also ambiguous and should initially be rejected with a useful error.
 
 ### Duplicate labels
 
@@ -56,13 +57,13 @@ Repeated labels have two distinct behaviors:
 - Variable lookup uses the most recent preceding declaration with that label, preserving top-to-bottom reassignment behavior.
 - Group aggregation retains every successfully evaluated entry, including entries whose labels repeat.
 
-For example, both Walmart entries contribute to `:ex`, while a later expression that references `Walmart` receives the second value:
+For example, both Vendor entries contribute to `:ex`, while a later expression that references `Vendor` receives the second value:
 
 ```markdown
-Walmart:ex: `=60.00`
-Walmart:ex: `=25.00`
-latest: `=Walmart`       <!-- 25.00 -->
-total: `=sum:ex`         <!-- 85.00 -->
+Vendor:ex = `=60.00`
+Vendor:ex = `=25.00`
+latest = `=Vendor`        <!-- 25.00 -->
+total = `=sum:ex`         <!-- 85.00 -->
 ```
 
 ### Inline render modes
@@ -116,46 +117,46 @@ Inline code without the leading `=` is ordinary Markdown and is not evaluated:
 `npm run build`
 ```
 
-This is intentionally a breaking change from implicit evaluation. It gives the plugin a reliable indication that an expression must either produce a result or display an error. Requiring the marker and changing declaration syntax should be released and migrated together.
+This is intentionally a breaking change from implicit evaluation. It gives the plugin a reliable indication that an expression must either produce a result or display an error. The existing declaration assignment remains in place.
 
 ## Declarations
 
-A named value uses a colon followed by an explicit expression:
+A named value retains the existing assignment delimiter and is followed by an explicit expression:
 
 ```markdown
-CPI: `=330.30`
-ratio: `=CPI / 299.97`
+CPI = `=330.30`
+ratio = `=CPI / 299.97`
 ```
 
-This replaces the current `NAME = \`EXPRESSION\`` declaration form and is independently a breaking change. Under the proposed grammar, the old form is not a declaration and does not create a variable:
+The declaration form itself is unchanged. Only the inline code span gains the explicit marker:
 
 ```markdown
-CPI = `330.30`  <!-- ordinary Markdown; does not declare CPI -->
-CPI: `=330.30`  <!-- Obsidian Units declaration -->
+CPI = `330.30`   <!-- ordinary Markdown; does not declare CPI -->
+CPI = `=330.30`  <!-- Obsidian Units declaration -->
 ```
-
-The declaration delimiter is the final colon followed by whitespace and the inline expression. Colons attached directly to the label are group sigils.
 
 General form:
 
 ```text
-LABEL[:SIGIL...]: `=EXPRESSION`
+LABEL[:SIGIL...] = `=EXPRESSION`
 ```
+
+The assignment delimiter is whitespace-surrounded `=`. Colons attached directly to the label are group sigils. The label is the first prefix segment and may contain whitespace, but it may not contain `=`. Every subsequent segment is a sigil and may not contain whitespace.
 
 ## Ledger form
 
 Pipes can separate the structural fields of a ledger entry:
 
 ```text
-- DATE | LABEL[:SIGIL...]: `=EXPRESSION` | OPTIONAL NOTE
+- DATE | LABEL[:SIGIL...] = `=EXPRESSION` | OPTIONAL NOTE
 ```
 
 Example:
 
 ```markdown
-- 2026-07-03 | CashApp:ex:ls: `=50.00` | Landscaping
-- 2026-07-03 | Walmart:ex:gr: `=60.00` | Groceries
-- 2026-07-03 | OG&E:ex:ob:bi: `=180.00` | Electricity bill
+- 2026-07-03 | Service:ex:ls = `=50.00` | Example service
+- 2026-07-03 | Store:ex:gr = `=60.00` | Example purchase
+- 2026-07-03 | Utility:ex:ob:bi = `=180.00` | Recurring charge
 ```
 
 The Markdown list marker is recognized only at the beginning of a line. The pipes provide clear field boundaries, while everything after the second pipe is commentary and does not affect evaluation.
@@ -163,7 +164,7 @@ The Markdown list marker is recognized only at the beginning of a line. The pipe
 The ledger form is a convention rather than a separate data format. A declaration can appear outside a list or without a date:
 
 ```markdown
-Hourly rate:pay: `=24.50`
+Hourly rate:pay = `=24.50`
 ```
 
 ## Group sigils
@@ -171,12 +172,12 @@ Hourly rate:pay: `=24.50`
 Each colon-attached sigil adds the value to a group:
 
 ```markdown
-CashApp:ex:ls: `=50.00`
+Service:ex:ls = `=50.00`
 ```
 
 This declaration has:
 
-- Label: `CashApp`
+- Label: `Service`
 - Value: `50.00`
 - Group memberships: `:ex` and `:ls`
 
@@ -185,13 +186,13 @@ An entry contributes its evaluated value once to every attached group. Repeated 
 Chaining provides classification without requiring a prose note:
 
 ```markdown
-Walmart:ex:gr: `=60.00`
+Store:ex:gr = `=60.00`
 ```
 
 Notes remain available when additional context is useful:
 
 ```markdown
-- 2026-07-03 | CashApp:ex:ls: `=50.00` | Front-yard mowing
+- 2026-07-03 | Service:ex:ls = `=50.00` | Example service
 ```
 
 ### Allowed sigils
@@ -199,8 +200,8 @@ Notes remain available when additional context is useful:
 Sigils are not limited to ASCII letters. Text, numbers, icons, and emoji should be supported:
 
 ```markdown
-Netflix:expense:subscription: `=20.00`
-Netflix:💸:📺: `=20.00`
+Subscription:expense:recurring = `=20.00`
+Subscription:💸:📺 = `=20.00`
 ```
 
 Whitespace and structural delimiters cannot occur inside an unquoted sigil. At minimum, the following terminate or invalidate a sigil:
@@ -247,9 +248,9 @@ The base group and the brace expression are joined by AND. Comma-separated membe
 :ex AND (:ob OR :ls)
 ```
 
-With the ledger above, this includes CashApp (`:ex:ls`) and OG&E (`:ex:ob:bi`) but excludes Walmart (`:ex:gr`).
+With the ledger above, this includes Service (`:ex:ls`) and Utility (`:ex:ob:bi`) but excludes Store (`:ex:gr`).
 
-Negation uses `!`:
+Negation is clause-scoped. Prefixing every member of a clause with `!` complements the union named by that clause:
 
 ```markdown
 `=sum:ex{!gr}`
@@ -261,13 +262,43 @@ Its meaning is:
 :ex AND NOT :gr
 ```
 
+For multiple exclusions:
+
+```markdown
+`=sum:ex{!ob,!ls}`
+```
+
+the clause means:
+
+```text
+:ex AND NOT (:ob OR :ls)
+```
+
+By De Morgan's law, this is equivalent to `:ex AND NOT :ob AND NOT :ls`. It does not mean `(NOT :ob) OR (NOT :ls)`: `!` selects negated-clause mode rather than binding independently to each term. Every member of a negated clause must carry `!` for readability. Mixed clauses such as `{ob,!ls}` are invalid.
+
 Therefore:
 
 ```markdown
 `=sum:ex`          <!-- all expenses -->
 `=sum:ex{ob,ls}`   <!-- expenses categorized as obligations or landscaping -->
 `=sum:ex{!gr}`     <!-- expenses not categorized as groceries -->
+`=sum:ex{!ob,!ls}` <!-- expenses categorized as neither obligations nor landscaping -->
 ```
+
+### Primary totals and secondary breakdowns
+
+Filters provide secondary or temporary tabulations without creating a separate kind of cascade. Every entry remains in one primary group, and an additional sigil marks only the entries that need a separate subtotal:
+
+```markdown
+paycheck:ic = `=645.45`
+bonus:ic:bonus = `=723.98`
+
+regular income = `=sum:ic{!bonus}`
+bonus income = `=sum:ic{bonus}`
+total income = `=sum:ic`
+```
+
+The base `:ic` group rolls the complete income total forward. The `:bonus` membership selects the secondary amount, while `{!bonus}` selects the complement. Only exceptional entries require the extra sigil, and the overall total cannot accidentally omit them. The same pattern can create any number of named breakdowns without adding another kind of cascade.
 
 Explicit `|` and `&` operators could be added later if expressions need nested Boolean logic. The initial comma-as-OR and `!` grammar should remain deliberately small.
 
@@ -295,6 +326,7 @@ Examples of useful diagnostics include:
 - Unknown group or aggregate function.
 - Missing parenthesis or brace.
 - Unexpected character or operator.
+- Forbidden `=` in a variable name.
 - Division by zero or a non-finite result.
 - Empty aggregate group.
 - Recursive or self-referential calculation.
@@ -302,8 +334,8 @@ Examples of useful diagnostics include:
 For example:
 
 ```markdown
-CPI: `=330.30`
-ratio: `=CIP / 299.97`
+CPI = `=330.30`
+ratio = `=CIP / 299.97`
 ```
 
 should display an error similar to:
@@ -323,8 +355,8 @@ Use `npm run build` to build the plugin.
 The implementation should parse the syntax in small stages rather than relying on one expression for an entire Markdown line:
 
 1. Identify inline code whose content begins with `=`.
-2. Inspect the text immediately preceding the code for an optional declaration.
-3. Separate the declaration delimiter from attached group sigils.
+2. Inspect the text immediately preceding the code for a whitespace-surrounded assignment `=` and an optional declaration prefix.
+3. Split the trimmed prefix into its label and attached group sigils.
 4. Evaluate the explicit expression.
 5. Store a successful named value and append it to each attached group.
 6. Evaluate aggregate functions against the group context accumulated so far.
@@ -347,9 +379,9 @@ The following details should be settled before implementation:
 ```markdown
 ## Expenses
 
-- 2026-07-03 | CashApp:ex:ls: `=50.00` | Landscaping
-- 2026-07-03 | Walmart:ex:gr: `=60.00` | Groceries
-- 2026-07-03 | OG&E:ex:ob:bi: `=180.00` | Electricity bill
+- 2026-07-03 | Service:ex:ls = `=50.00` | Example service
+- 2026-07-03 | Store:ex:gr = `=60.00` | Example purchase
+- 2026-07-03 | Utility:ex:ob:bi = `=180.00` | Recurring charge
 
 - Total | `=sum:ex` | Expense total
 - Total | `=sum:ex{ob,ls}` | Obligations and landscaping

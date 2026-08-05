@@ -2,7 +2,7 @@
 
 ## Objective
 
-Implement the explicit-expression, colon-declaration, sigil-group, and aggregate syntax specified in `GROUPED_CALCULATIONS.md` while preserving supported unit-conversion behavior and giving Live Preview and Reading View the same results and diagnostics.
+Implement the explicit-expression, assignment-declaration, sigil-group, aggregate, and aggregate-filter syntax specified in `GROUPED_CALCULATIONS.md` while preserving supported unit-conversion behavior and giving Live Preview and Reading View the same results and diagnostics.
 
 The implementation should establish one pure calculation engine shared by every Obsidian adapter. Rendering code must not contain a second parser or evaluator.
 
@@ -11,9 +11,10 @@ The implementation should establish one pure calculation engine shared by every 
 The implementation targets these decisions:
 
 - Inline expressions owned by Obsidian Units must begin with `=`.
-- Named declarations use `LABEL[:SIGIL...]: \`=EXPRESSION\``.
+- Named declarations retain `LABEL[:SIGIL...] = \`=EXPRESSION\``.
 - Ordinary inline code without the leading marker is ignored.
 - Labels remain human-readable and may contain spaces or punctuation already supported by variable resolution.
+- `=` is always structural and is explicitly rejected inside variable labels.
 - Literal colons inside labels are rejected initially.
 - Text sigils compare case-insensitively after Unicode normalization; emoji sequences are preserved.
 - A declaration may belong to multiple chained groups.
@@ -23,7 +24,8 @@ The implementation targets these decisions:
 - The first release aggregates dimensionless numeric values only.
 - Aggregate results cannot themselves become group members in the first release.
 - `{a,b}` means `a OR b`; the base group and every brace clause are joined by AND.
-- `{!a}` negates a membership test.
+- Negation is clause-scoped: `{!a,!b}` means `NOT (a OR b)`, not `(NOT a) OR (NOT b)`.
+- Filtered aggregates provide secondary breakdowns: exceptional entries receive an additional sigil, the positive filter selects them, and the negated filter selects the complement without removing either from the base-group total.
 - Mixed positive and negative terms in one brace clause are rejected. Repeated clauses express AND, such as `{ob,ls}{!late}`.
 - `sum` and `count` return `0` for an empty selection.
 - `avg`, `min`, and `max` return a visible empty-selection error.
@@ -166,6 +168,7 @@ interface EvaluationContext {
   variables: Map<string, EvaluatedValue>;
   groups: Map<string, GroupMember[]>;
 }
+
 ```
 
 ## Phase 0: Test and extraction foundation
@@ -198,39 +201,47 @@ interface EvaluationContext {
 
 1. Parse only inline code spans whose content begins with `=` as explicit expressions.
 2. Parse an optional declaration from the text immediately preceding the code span.
-3. Separate the final declaration colon from zero or more attached sigils.
-4. Normalize labels consistently with existing variable lookup.
-5. Normalize sigils using a selected Unicode normalization form and case-insensitive text comparison.
-6. Reject:
+3. Recognize the whitespace-surrounded assignment `=` immediately before the explicit code span and parse the trimmed declaration prefix to its left.
+4. Separate a possibly multiword label from zero or more attached `:sigil` references.
+5. Normalize labels consistently with existing variable lookup.
+6. Normalize sigils using a selected Unicode normalization form and case-insensitive text comparison.
+7. Reject:
    - Empty labels when a declaration delimiter is present.
    - Empty sigils.
+   - `=` anywhere inside a label.
    - Literal or ambiguous colons in labels.
    - Structural delimiters or whitespace inside sigils.
    - Sigils beyond the chosen length limit.
-7. Treat list markers, dates, pipes, and trailing notes as surrounding presentation rather than required syntax.
+8. Treat list markers, dates, pipes, and trailing notes as surrounding presentation rather than required syntax.
 
 ### Representative tests
 
 ```markdown
-CPI: `=330.30`
-Hourly rate:pay: `=24.50`
-- 2026-07-03 | CashApp:ex:ls: `=50.00` | Landscaping
-Netflix:💸:📺: `=20.00`
+CPI = `=330.30`
+Hourly rate:pay = `=24.50`
+- 2026-07-03 | Service:ex:ls = `=50.00` | Example service
+Subscription:💸:📺 = `=20.00`
+bonus:pay:bonus = `=723.98`
 ```
 
 Verify that these are not plugin declarations:
 
 ```markdown
 CPI = `330.30`
-CPI: `330.30`
 Use `npm run build`.
+```
+
+Verify that this produces an invalid-label diagnostic rather than declaring a variable:
+
+```markdown
+invalid=name = `=10`
 ```
 
 ### Exit criteria
 
 - The parser produces a typed declaration containing the display label, normalized lookup name, ordered unique groups, expression source, and source offset.
 - Invalid declaration syntax returns a structured diagnostic.
-- Parser tests cover ASCII, spaces, punctuation, Unicode, emoji, repeated sigils, and ledger presentation.
+- Parser tests cover ASCII, spaces, permitted punctuation, rejected `=` characters, Unicode, emoji, repeated sigils, and ledger presentation.
 
 ## Phase 2: Expression and aggregate AST
 
@@ -243,7 +254,7 @@ Use `npm run build`.
    - Base group.
    - Zero or more brace filter clauses.
    - Positive OR terms within a clause.
-   - Negative terms within a clause.
+   - Fully negated clauses whose members name the union to complement.
 4. Reject mixed positive and negative terms within the same clause.
 5. Support repeated clauses as AND:
 
@@ -251,8 +262,20 @@ Use `npm run build`.
 `=sum:ex{ob,ls}{!late}`
 ```
 
-6. Produce source-position-aware diagnostics for malformed braces, unknown aggregate functions, empty filters, and invalid sigils.
-7. Preserve the command parser as a separate explicit-intent entry point that does not require the leading marker.
+6. Cover the documented subtotal pattern:
+
+```markdown
+paycheck:ic = `=645.45`
+bonus:ic:bonus = `=723.98`
+regular income = `=sum:ic{!bonus}`
+bonus income = `=sum:ic{bonus}`
+total income = `=sum:ic`
+```
+
+Verify that the positive and negated selections partition the base group and that their sums equal the unfiltered total.
+
+7. Produce source-position-aware diagnostics for malformed braces, unknown aggregate functions, empty filters, and invalid sigils.
+8. Preserve the command parser as a separate explicit-intent entry point that does not require the leading marker.
 
 ### Representative tests
 
@@ -260,6 +283,7 @@ Use `npm run build`.
 `=sum:ex`
 `=sum:ex{ob,ls}`
 `=sum:ex{!gr}`
+`=sum:ex{!ob,!ls}`
 `=sum:ex{ob,ls}{!late}`
 ```
 
@@ -303,10 +327,10 @@ Invalid cases include:
 ### Representative scenario
 
 ```markdown
-Walmart:ex:gr: `=60.00`
-Walmart:ex:gr: `=25.00`
-latest: `=Walmart`
-expense total: `=sum:ex`
+Vendor:ex:gr = `=60.00`
+Vendor:ex:gr = `=25.00`
+latest = `=Vendor`
+expense total = `=sum:ex`
 ```
 
 Expected behavior:
@@ -314,6 +338,16 @@ Expected behavior:
 ```text
 latest        = 25.00
 expense total = 85.00
+```
+
+Brace filters derive secondary breakdowns from a primary cascade while preserving its complete running total:
+
+```markdown
+paycheck:ic = `=645.45`
+bonus:ic:bonus = `=723.98`
+regular income = `=sum:ic{!bonus}`
+bonus income = `=sum:ic{bonus}`
+total income = `=sum:ic`
 ```
 
 ### Exit criteria
@@ -368,8 +402,10 @@ Tests are added throughout every phase; this phase closes coverage gaps and veri
 ### Grammar matrix
 
 - Explicit versus ordinary inline code.
-- Colon declarations with zero, one, and multiple sigils.
+- Assignment declarations with zero, one, and multiple sigils.
+- Primary totals and filtered secondary breakdowns.
 - Multiword and punctuated labels.
+- Explicit rejection of `=` inside variable labels.
 - Text, Unicode, and emoji sigils.
 - Ledger lines with and without dates, notes, or list markers.
 - Aggregate functions and repeated filters.
@@ -381,6 +417,8 @@ Tests are added throughout every phase; this phase closes coverage gaps and veri
 - Longest-name-first variable resolution.
 - Repeated group members.
 - OR, NOT, and repeated-clause AND filtering.
+- Clause-scoped negation, including `NOT (a OR b)` behavior for `{!a,!b}`.
+- Positive-filter subtotals, negated complements, and preservation of the unfiltered base total.
 - Empty aggregate identities and errors.
 - Unit-bearing member rejection.
 - Aggregate result group-membership rejection.
@@ -421,7 +459,7 @@ Tests are added throughout every phase; this phase closes coverage gaps and veri
 Add a deliberate command that uses the old parser to classify existing notes:
 
 1. Prefix recognized arithmetic and conversions with `=`.
-2. Convert recognized `NAME = \`EXPRESSION\`` declarations to `NAME: \`=EXPRESSION\``.
+2. Retain recognized `NAME = \`EXPRESSION\`` declarations and prefix their expression contents with `=`.
 3. Leave unrecognized inline code untouched.
 4. Preview or report changed, ambiguous, and skipped expressions before destructive vault-wide use.
 5. Operate on the active note first; consider vault-wide migration only as a separate, explicitly confirmed action.
@@ -447,9 +485,9 @@ Because there is currently one user, a legacy mode is unnecessary unless migrati
 Given:
 
 ```markdown
-- 2026-07-03 | CashApp:ex:ls: `=50.00` | Landscaping
-- 2026-07-03 | Walmart:ex:gr: `=60.00` | Groceries
-- 2026-07-03 | OG&E:ex:ob:bi: `=180.00` | Electricity bill
+- 2026-07-03 | Service:ex:ls = `=50.00` | Example service
+- 2026-07-03 | Store:ex:gr = `=60.00` | Example purchase
+- 2026-07-03 | Utility:ex:ob:bi = `=180.00` | Recurring charge
 - Total | `=sum:ex` | Expense total
 - Total | `=sum:ex{ob,ls}` | Obligations and landscaping
 - Total | `=sum:ex{!gr}` | Non-grocery expenses
@@ -466,8 +504,8 @@ sum:ex{!gr}   = 230.00
 While this typo:
 
 ```markdown
-CPI: `=330.30`
-ratio: `=CIP / 299.97`
+CPI = `=330.30`
+ratio = `=CIP / 299.97`
 ```
 
 must produce a visible diagnostic similar to:
