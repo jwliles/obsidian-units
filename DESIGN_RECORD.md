@@ -2,14 +2,14 @@
 
 ## Status
 
-This document consolidates every design decision, proposal, defect,
+This document is the authoritative design record for grouped calculations. It consolidates every design decision, proposal, defect,
 and open question produced during the 2026-08-05 design review and
-live testing of the grouped-calculations feature. It supplements
-GROUPED_CALCULATIONS.md and IMPLEMENTATION_PLAN.md; where those
-documents are silent or stale, this record states the settled
+live testing of the grouped-calculations feature. `GROUPED_CALCULATIONS.md`
+provides the original rationale and `IMPLEMENTATION_PLAN.md` tracks work;
+where either conflicts with this record, this record states the settled
 position. Sections are marked **Settled** (decided, in some cases
 implemented and verified), **Proposed** (design direction agreed,
-details open), or **Defect** (implemented behavior that must change).
+details open), or **Defect record** (a historical problem and its resolution).
 
 ---
 
@@ -17,42 +17,31 @@ details open), or **Defect** (implemented behavior that must change).
 
 ## 1. Explicit expressions and declarations (Settled, implemented)
 
-Every plugin-owned expression begins with `=` inside an inline code
-span. Inline code without the marker is ordinary Markdown: no render,
+Every plugin-owned expression begins with the configured marker inside an
+inline code span. The default marker is `=` and exactly one marker is active.
+Inline code without the configured marker is ordinary Markdown: no render,
 no error, no declaration. Verified: `npm run build`, prose fractions,
 and unmarked pseudo-declarations (`CAC = ` followed by a plain code
 span) all remain untouched and do not disturb adjacent evaluation.
 
 A declaration is `LABEL[:SIGIL...] = ` followed by an explicit
 expression. The assignment delimiter is whitespace-surrounded `=`.
+Changing the configured marker does not erase declaration structure: a
+declaration using the previous marker is retained without a value or group
+membership and receives an incorrect-marker diagnostic. The active-file
+marker update command changes recognized declarations, aggregates, and
+conversions; ambiguous standalone arithmetic remains unchanged.
 
-**Label character rules.** Labels may contain whitespace. Labels may
-NOT contain literal colons or `=`; both are rejected with a
-diagnostic. (The `=` rejection is implemented and verified; neither
-rule is yet written into the proposal — see Part IV.)
+**Label character rules.** Labels may contain whitespace. Labels may not
+contain literal colons or `=`; both are rejected with a diagnostic and are
+documented in the implementation plan.
 
-**Declaration prefix boundary.** The spec's "text immediately
-preceding the code span" needs an extent rule, and the working
-implementation already embodies one:
-
-- A colon attached directly to non-whitespace claims sigil position
-  and is validated as a sigil (`bad:si gil` → invalid-sigil error).
-- An unattached colon (followed by whitespace) cannot be a sigil
-  separator and cannot be inside a label, so it silently terminates
-  the label's leftward extent. Prose-colon-then-declaration is
-  therefore a sanctioned idiom with a load-bearing colon:
-
-  ```markdown
-  and this still works: sanity = `=2 + 2`
-  ```
-
-- The asymmetry is deliberate: an unattached colon bounds silently
-  (no assignment intent), while a stray `=` in the prefix errors
-  loudly (genuine ambiguity about which `=` is the delimiter).
-- Residual documented surprise: the same sentence WITHOUT the colon
-  absorbs the prose into a multiword label. Spec-consistent; the
-  colon idiom is its own remedy. One README paragraph covers the
-  pair.
+**Declaration prefix boundary.** A declaration occupies the current line or
+the final ledger field before the assignment. A list marker is presentation;
+the last `|` establishes the start of a ledger field. There is no silent
+prose-colon boundary. Colons attach sigils directly (`Label:group`) and a
+colon followed by whitespace is rejected as an unsupported literal colon.
+Put prose on a separate line or before a ledger `|` boundary.
 
 **One declaration per line** is policy (see D5 for its diagnostic).
 
@@ -83,15 +72,14 @@ Variable lookup takes the most recent preceding successful
 declaration. Group aggregation retains every successful entry,
 including repeated labels. Both behaviors verified live.
 
-## 4. Sigils (Settled except limits)
+## 4. Sigils (Settled)
 
-Text, numbers, icons, emoji. Case-insensitive comparison after
-Unicode normalization (verified both directions: `sum:CAC` and
-`sum:cAc` resolve `:cac`); emoji preserved. Invalid inside an
-unquoted sigil: whitespace, `:`, `|`, `=`, backtick — **plus `;`,
-newly reserved for interval terminators (Part II)**. Normalization
-form (NFC vs NFKC — matters for ZWJ/skin-tone emoji sequences) and
-maximum length remain open.
+Text, numbers, icons, emoji. Case-insensitive comparison after NFKC
+normalization (verified both directions: `sum:CAC` and `sum:cAc` resolve
+`:cac`); emoji sequences are preserved. Sigils are limited to 64 Unicode
+code points. Whitespace and structural characters (`:`, `=`, braces, comma,
+`!`, and backtick) are invalid. A ledger `|` establishes a field boundary
+and is never sigil content. No interval punctuation is reserved yet.
 
 ## 5. Filters (Settled, implemented, fully verified)
 
@@ -151,7 +139,8 @@ preceding-content-scope decision, now verified live. Whole-note
 collection remains explicitly rejected unless revisited.
 
 Aggregate results cannot be attached to the group they query
-(`total:t = \`=sum:t\`` → error, verified). Labeled UNGROUPED
+(`total:t = \`=sum:t\`` → error, verified). In the first release, aggregate
+results cannot be attached to any group. Labeled UNGROUPED
 aggregates are supported and reusable as variables
 (`running total = \`=sum:t\``, then `\`=running total * 2\``) —
 inferred from the plan's Phase 3 allowance, now pinned by fixture 03.
@@ -167,7 +156,7 @@ fixture ledger.
 
 ---
 
-# Part II — Scope tiers and intervals (Proposed)
+# Part II — Scope tiers and intervals (Exploration; syntax not accepted)
 
 ## Motivation
 
@@ -213,8 +202,7 @@ which is what "tier" should mean.
 
 ## Terminators
 
-- `;` is reserved in the sigil character set now, ahead of any
-  syntax decision, so no note can use it as sigil content.
+- No punctuation is reserved until the interval grammar is accepted.
 - Spelling `:;` preferred over bare `;` — a lone semicolon is
   common prose punctuation and would need positional disambiguation;
   `:;` is unambiguous in sigil position and reads as "sigil, ended."
@@ -309,17 +297,15 @@ convention independent of any widget.
 
 ---
 
-# Part IV — Defects (implemented behavior that must change)
+# Part IV — Defect record
 
-## D1. Suggestion engine is a stub with the wrong candidate pool — HIGH
+## D1. Suggestion ordering — FIXED
 
-Observed: `Unknown variable "CIP". Did you mean "cac"?` — a sigil,
-distance 2, while `CPI` (variable, Damerau distance 1, previous
-line) goes unsuggested; the unknown-group path offers no
-cross-namespace hint for `sum:Walmart`. Cause: an early placeholder,
-not a design error — but a stub in a diagnostics path that returns
-SOMETHING is worse than one returning nothing, because diagnostic
-text is trusted.
+The old ordinary-Levenshtein implementation treated the `CIP`/`CPI`
+transposition as two edits and tied it with the earlier `CAC` variable.
+This is fixed with Damerau-Levenshtein, conservative thresholds, silence on
+ties, source-spelling preservation, and an exact variable-namespace probe
+for unknown groups.
 
 Fix (policy assembled and pre-tested by fixture 01):
 - Unknown variable → rank the VARIABLE table only,
@@ -330,15 +316,14 @@ Fix (policy assembled and pre-tested by fixture 01):
 - Unknown group → EXACT probe of the variable table; on hit, the
   cross-namespace hint ("X is a variable; aggregates operate on
   sigils"). No fuzzy matching across namespaces in either direction.
-- Interim: stub returns no suggestion.
 
-## D2. Diagnostics echo normalized spelling — MEDIUM
+## D2. Diagnostics echoed normalized spelling — FIXED
 
 `"walmart"`, `"cac"` where the user wrote `Walmart`, `CAC`.
 Normalize for lookup; display source spelling. One field on the
 diagnostic type.
 
-## D3. Failed declarations shadow longer successful names — HIGH
+## D3. Failed declarations shadowed longer successful names — FIXED
 
 `=running total * 2` resolved failed `total` instead of successful,
 longer `running total`, erroring with "declared but has no
@@ -350,31 +335,23 @@ variable" to the better message. Pin the interaction (failed short
 name prefixing successful long name) as a dedicated test; no unit
 test of either feature alone catches it.
 
-## D4. Computed values strip trailing zeros — MEDIUM
+## D4. Computed values stripped trailing zeros — FIXED
 
-Declarations echo source (`5.00`); anything computed renders
-canonical stripped form (`200`, `82.5`, `330` from `*.00` inputs;
-also input-side: `=86` among `104.90` entries). Coherent for math,
-wrong for money. Proposed rule: render computed values with at least
-the max decimal places among contributing inputs; pure-integer
-inputs keep integer output; no setting needed. Do NOT edit fixture
-comments to match current output — decide the rule, then make both
-conform to the decision.
+Number values retain a minimum decimal scale. Variable references preserve
+their declaration scale; arithmetic and aggregates use at least the maximum
+scale of their contributing numeric values; `count` remains an integer.
+Configured precision remains the maximum calculation display precision.
 
-## D5. Multi-declaration lines misdiagnosed — LOW
+## D5. Multi-declaration lines were misdiagnosed — FIXED
 
-Flattened input (paste, sync, import) fusing two declarations onto
-one line reports `Variable labels cannot contain "="` with a
-garbage label, because the second prefix scan ingests the first
-declaration. The one-per-line policy is fine; when the bounded scan
-finds a complete earlier declaration, report "only one declaration
-per line" at the second span.
+Flattened input (paste, sync, import) fusing two declarations onto one line
+formerly reported `Variable labels cannot contain "="`. The parser now
+reports "Only one declaration is allowed per line" at the second span.
 
-## D6. Mixed-polarity message lacks the remedy — POLISH
+## D6. Mixed-polarity message lacked the remedy — FIXED
 
-Append: "Use {!gr,!ls} to exclude both, or separate clauses like
-{ls}{!gr} to combine polarities." The one filter error users will
-hit; the remedy took the design review five messages to converge on.
+The diagnostic now appends: "Use {!gr,!ls} to exclude both, or separate
+clauses like {ls}{!gr} to combine polarities."
 
 ---
 
@@ -416,9 +393,8 @@ IMPLEMENTATION_PLAN.md:
   author; verify the partition invariant example is included.
 - Per-term negation markers and their error-detection rationale.
 - `=` rejected in labels (implemented; unwritten).
-- Declaration prefix boundary: attached-colon-is-sigil /
-  unattached-colon-bounds, the prose-colon idiom, the no-colon
-  absorption surprise (README paragraph).
+- Declaration prefix boundary: current line or final ledger field;
+  attached colons introduce sigils and unattached colons are errors.
 - Diagnostic spelling policy (D2) and suggestion policy (D1).
 - Adopted self-reference wording (Part I §6).
 - `;` reserved in the sigil character set.
@@ -454,16 +430,14 @@ errors, and prose.
 
 # Recommended sequencing
 
-1. D3 and D1 (the two behavioral/diagnostic defects), D2 riding
-   along on the diagnostic type.
-2. Decide D4's precision rule; update implementation and fixtures
-   together.
-3. Provenance capture in the core + trace widget (Part III) —
+1. Keep the executable Markdown fixtures and compatibility tests as the
+   regression gate for the completed grouped-calculations milestone.
+2. Provenance capture in the core + trace widget (Part III) —
    prerequisite for intervals.
-4. Scope tiers and terminators (Part II), with its fixture file
+3. Scope tiers and terminators (Part II), with its fixture file
    written before implementation, including the ordering rule and
    both edge diagnostics.
-5. Sigil concealment (Part V) after Part II removes the numbered
+4. Sigil concealment (Part V) after Part II removes the numbered
    groups — judge the aesthetics of the real syntax, not the
    workaround.
-6. D5, D6, and the documentation pass (Part VI) opportunistically.
+5. Complete the remaining documentation gaps in Part VI opportunistically.

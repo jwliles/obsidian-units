@@ -872,7 +872,7 @@ export default class ObsidianUnitsPlugin extends Plugin {
 			return this.evaluationCache.index;
 		}
 		const index = evaluateDocument(source, {
-			formatNumber: (value) => formatNumber(value, this.settings.precision),
+			formatNumber: (value, minimumDecimalPlaces = 0) => formatNumber(value, this.settings.precision, minimumDecimalPlaces),
 			evaluateCompatibility: (expression, values) => evaluateCompatibilityExpression(expression, values, this.settings),
 			marker: this.settings.expressionMarker,
 			incorrectMarkers: [this.settings.previousExpressionMarker, DEFAULT_SETTINGS.expressionMarker],
@@ -1244,20 +1244,33 @@ export function evaluateInlineExpressionFallback(text: string, settings: Obsidia
 }
 
 export function evaluateCompatibilityExpression(expression: string, values: Map<string, EvaluatedValue>, settings: ObsidianUnitsSettings) {
-	const variables: VariableMap = new Map();
-	for (const [name, value] of values) if (value.kind === 'number') variables.set(name, value.value);
-	const evaluation = evaluateInlineExpressionFallback(expression, settings, variables, true);
-	if (!evaluation) {
-		const message = diagnoseConversion(expression, settings);
-		return message ? { kind: 'error' as const, code: 'conversion-error', message } : null;
-	}
 	const conversion = parseInlineConversion(expression, settings);
-	const numericValue = conversion?.conversion.output ?? extractLeadingNumber(evaluation.text);
-	if (numericValue === null) return null;
-	const value: EvaluatedValue = conversion
-		? { kind: 'quantity', value: conversion.conversion.output, unit: conversion.conversion.target.canonical, dimension: conversion.conversion.target.dimension }
-		: { kind: 'number', value: numericValue };
-	return { kind: 'success' as const, value, display: evaluation.text, consumeTrailingS: evaluation.consumeTrailingS };
+	if (conversion) {
+		const display = formatInlineConversion(conversion, settings);
+		return {
+			kind: 'success' as const,
+			value: { kind: 'quantity' as const, value: conversion.conversion.output, unit: conversion.conversion.target.canonical, dimension: conversion.conversion.target.dimension },
+			display,
+			consumeTrailingS: display.endsWith('s'),
+		};
+	}
+	const numericDisplay = formatNumericLiteral(expression, settings.precision);
+	if (numericDisplay !== null) {
+		const numericValue = Number(stripArithmeticEquals(expression));
+		return {
+			kind: 'success' as const,
+			value: { kind: 'number' as const, value: numericValue, decimalPlaces: decimalPlacesInLiteral(expression) },
+			display: numericDisplay,
+			consumeTrailingS: false,
+		};
+	}
+	const message = diagnoseConversion(expression, settings);
+	return message ? { kind: 'error' as const, code: 'conversion-error', message } : null;
+}
+
+function decimalPlacesInLiteral(expression: string): number {
+	const match = stripArithmeticEquals(expression).match(/^[+-]?(?:\d+\.(\d*)|\.(\d+))(?:e[+-]?\d+)?$/i);
+	return Math.min((match?.[1] ?? match?.[2] ?? '').length, 10);
 }
 
 function stripInlineCodeMarkers(text: string): string {
@@ -1430,13 +1443,20 @@ function pickUnitForm(unit: Unit, value: number, settings: ObsidianUnitsSettings
 		: formatUnitName(unit, value);
 }
 
-function formatNumber(value: number, precision: number): string {
+function formatNumber(value: number, precision: number, minimumDecimalPlaces = 0): string {
 	if (Object.is(value, -0)) {
-		return '0';
+		value = 0;
 	}
 
 	const formatted = value.toFixed(precision);
-	return formatted.replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
+	let compact = formatted.replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
+	const minimum = Math.min(Math.max(0, minimumDecimalPlaces), precision);
+	if (minimum === 0) return compact;
+	const point = compact.indexOf('.');
+	if (point < 0) return `${compact}.${'0'.repeat(minimum)}`;
+	const present = compact.length - point - 1;
+	if (present < minimum) compact += '0'.repeat(minimum - present);
+	return compact;
 }
 
 function formatNumericLiteral(text: string, precision: number): string | null {

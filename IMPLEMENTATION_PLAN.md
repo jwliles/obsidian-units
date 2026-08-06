@@ -144,7 +144,7 @@ type EvaluationOutcome =
   | { kind: 'not-applicable' };
 
 type EvaluatedValue =
-  | { kind: 'number'; value: number }
+  | { kind: 'number'; value: number; decimalPlaces: number }
   | { kind: 'quantity'; value: number; unit: string; dimension: string };
 ```
 
@@ -216,6 +216,7 @@ interface EvaluationContext {
    - Sigils beyond the chosen length limit.
 8. Treat list markers, dates, pipes, and trailing notes as surrounding presentation rather than required syntax.
 9. Diagnose declarations that use the previous marker and retain their unbound declaration identity.
+10. Bound declarations to the current line or final ledger field; reject unattached literal colons rather than treating prose punctuation as a silent boundary.
 
 ### Representative tests
 
@@ -326,6 +327,8 @@ Invalid cases include:
 8. Reject declarations that attach aggregate results to groups. Continue allowing an ungrouped aggregate to receive a label for later variable lookup if desired and covered by tests.
 9. Detect unknown variables and suggest the nearest known label when confidence is sufficient.
 10. Reject non-finite arithmetic results, division by zero, recursion, and other semantic failures with typed diagnostics.
+11. Preserve source spelling in diagnostics. Use Damerau-Levenshtein over successful variables only, with conservative thresholds and silence on ties; unknown groups perform only an exact variable-namespace probe.
+12. Carry minimum decimal scale on numeric values. Variables preserve declaration scale, aggregates and arithmetic use the maximum contributed scale, and `count` remains an integer.
 
 ### Representative scenario
 

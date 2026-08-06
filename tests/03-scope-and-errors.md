@@ -65,5 +65,5 @@ a = b = `=1.00`
 
 ## Ordinary code adjacent to errors
 
-The failures above must not leak: `echo hello` stays untouched,
-and this still works: sanity = `=2 + 2` <!-- 4 -->
+The failures above must not leak: `echo hello` stays untouched.
+sanity = `=2 + 2` <!-- 4 -->

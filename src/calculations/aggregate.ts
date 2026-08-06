@@ -2,7 +2,7 @@ import { normalizeSigil } from './normalize';
 
 export type AggregateFunction = 'sum' | 'count' | 'avg' | 'min' | 'max';
 export interface AggregateFilter { negated: boolean; sigils: string[] }
-export interface AggregateExpression { fn: AggregateFunction; group: string; filters: AggregateFilter[] }
+export interface AggregateExpression { fn: AggregateFunction; group: string; groupSource: string; filters: AggregateFilter[] }
 export type AggregateParseOutcome = { kind: 'success'; node: AggregateExpression } | { kind: 'none' } | { kind: 'error'; message: string };
 
 export function parseAggregate(source: string): AggregateParseOutcome {
@@ -30,16 +30,16 @@ export function parseAggregate(source: string): AggregateParseOutcome {
 		const terms = clause[1].split(',').map((term) => term.trim());
 		const negative = terms.map((term) => term.startsWith('!'));
 		if (negative.some(Boolean) && !negative.every(Boolean)) {
-			return { kind: 'error', message: 'Positive and negative sigils cannot be mixed in one filter clause.' };
+			return { kind: 'error', message: 'Positive and negative sigils cannot be mixed in one filter clause. Use {!gr,!ls} to exclude both, or separate clauses like {ls}{!gr} to combine polarities.' };
 		}
 		const sigils = terms.map((term) => normalizeSigil(term.replace(/^!/, '')));
 		if (sigils.some((sigil) => !validSigil(sigil))) return { kind: 'error', message: 'Invalid aggregate filter sigil.' };
 		filters.push({ negated: negative[0], sigils: Array.from(new Set(sigils)) });
 		rest = rest.slice(clause[0].length);
 	}
-	return { kind: 'success', node: { fn: fn as AggregateFunction, group, filters } };
+	return { kind: 'success', node: { fn: fn as AggregateFunction, group, groupSource: head[2], filters } };
 }
 
 function validSigil(value: string): boolean {
-	return value.length > 0 && !/\s|[=:{},!`]/u.test(value) && Array.from(value).length <= 64;
+	return value.length > 0 && !/\s|[=:{},!|`]/u.test(value) && Array.from(value).length <= 64;
 }

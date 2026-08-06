@@ -2,6 +2,7 @@ import { strict as assert } from 'node:assert';
 import { parseAggregate } from '../src/calculations/aggregate';
 import { parseDeclaration } from '../src/calculations/declarations';
 import { evaluateDocument } from '../src/document/evaluation-index';
+import { scanInlineCode } from '../src/document/scanner';
 
 const options = { formatNumber: (value: number) => String(value) };
 
@@ -30,10 +31,14 @@ if (declaration.kind === 'success') {
 }
 assert.equal(parseDeclaration('invalid=name = ', '10', 0).kind, 'error');
 assert.equal(parseDeclaration('name: = ', '10', 0).kind, 'error');
+assert.equal(parseDeclaration('prose: label = ', '10', 0).kind, 'error');
+assert.equal(parseDeclaration('first = `=1` second = ', '2', 0).kind, 'error');
 
 // Aggregate grammar.
 assert.equal(parseAggregate('sum:ex{ob,ls}{!late}').kind, 'success');
 assert.equal(parseAggregate('sum:ex{ob,!late}').kind, 'error');
+const mixedFilter = parseAggregate('sum:ex{ob,!late}');
+if (mixedFilter.kind === 'error') assert.match(mixedFilter.message, /separate clauses/);
 assert.equal(parseAggregate('sum:ex{}').kind, 'error');
 assert.equal(parseAggregate('unknown:ex').kind, 'error');
 assert.equal(parseAggregate('sum:ex{ob').kind, 'error');
@@ -85,8 +90,17 @@ const typo = outcomes('CPI = `=330.30`\nratio = `=CIP / 299.97`')[1];
 assert.equal(typo.kind, 'error');
 if (typo.kind === 'error') {
 	assert.equal(typo.diagnostic.code, 'unknown-variable');
-	assert.match(typo.diagnostic.message, /Did you mean "cpi"/);
+	assert.match(typo.diagnostic.message, /Did you mean "CPI"/);
 }
+const namespaceHint = outcomes('Walmart = `=10`\n`=sum:Walmart`')[1];
+assert.equal(namespaceHint.kind, 'error');
+if (namespaceHint.kind === 'error') {
+	assert.match(namespaceHint.diagnostic.message, /Unknown group "Walmart"/);
+	assert.match(namespaceHint.diagnostic.message, /Walmart.*variable/);
+}
+const noSuggestion = outcomes('tiny = `=zq * 2`')[0];
+assert.equal(noSuggestion.kind, 'error');
+if (noSuggestion.kind === 'error') assert.doesNotMatch(noSuggestion.diagnostic.message, /Did you mean/);
 assert.equal(outcomes('total:ex = `=sum:ex`')[0].kind, 'error');
 assert.equal(outcomes('later = `=future`\nfuture = `=2`')[0].kind, 'error');
 
@@ -104,6 +118,10 @@ const divideByZero = outcomes('`=1 / 0`')[0];
 assert.equal(divideByZero.kind, 'error');
 if (divideByZero.kind === 'error') assert.equal(divideByZero.diagnostic.code, 'non-finite-result');
 
+const failedShortName = outcomes('a:t = `=5.00`\ntotal:t = `=sum:t`\nrunning total = `=sum:t`\ndoubled = `=running total * 2`');
+assert.equal(failedShortName[3].kind, 'success');
+if (failedShortName[3].kind === 'success') assert.equal(failedShortName[3].value.value, 10);
+
 const customMarker = evaluateDocument('CAC = `=200`\nTotal = `~CAC + 1`\nGood = `~2`', {
 	...options,
 	marker: '~',
@@ -114,5 +132,7 @@ if (customMarker[0].kind === 'error') assert.equal(customMarker[0].diagnostic.co
 assert.equal(customMarker[1].kind, 'error');
 if (customMarker[1].kind === 'error') assert.equal(customMarker[1].diagnostic.code, 'unbound-variable');
 assert.equal(customMarker[2].kind, 'success');
+
+assert.deepEqual(scanInlineCode('`=1`\n<!-- `=2` -->\n```md\n`=3`\n```\n`=4`').map((span) => span.content), ['=1', '=4']);
 
 console.log('All grouped calculation tests passed.');

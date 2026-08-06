@@ -16,6 +16,7 @@ export function parseDeclaration(prefix: string, expressionSource: string, sourc
 	// Ledger dates and separators are presentation, not part of the declaration.
 	const pipe = raw.lastIndexOf('|');
 	if (pipe >= 0) raw = raw.slice(pipe + 1).trim();
+	if (/`[^`\n]+`/.test(raw)) return error('multiple-declarations', 'Only one declaration is allowed per line.', sourceOffset);
 	if (!raw) return error('invalid-declaration', 'A declaration requires a label.', sourceOffset);
 	if (raw.includes('=')) return error('invalid-label', 'Variable labels cannot contain "=".', sourceOffset);
 
@@ -26,9 +27,12 @@ export function parseDeclaration(prefix: string, expressionSource: string, sourc
 
 	const groups: string[] = [];
 	for (const rawSigil of parts) {
+		if (rawSigil !== rawSigil.trim()) {
+			return error('invalid-label', 'Literal colons are not supported in variable labels; group sigils must attach directly to the label.', sourceOffset);
+		}
 		const sigil = normalizeSigil(rawSigil.trim());
 		if (!sigil) return error('invalid-sigil', 'Group sigils cannot be empty.', sourceOffset);
-		if (/\s|[=:{},!`]/u.test(sigil) || Array.from(sigil).length > MAX_SIGIL_LENGTH) {
+		if (/\s|[=:{},!|`]/u.test(sigil) || Array.from(sigil).length > MAX_SIGIL_LENGTH) {
 			return error('invalid-sigil', `Invalid group sigil "${rawSigil}".`, sourceOffset);
 		}
 		if (!groups.includes(sigil)) groups.push(sigil);

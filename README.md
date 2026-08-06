@@ -63,6 +63,8 @@ newerPay = `=oldPay (newCPI / oldCPI)`
 
 The labels above are available by name inside later expressions. Earlier results are not recalculated from later assignments.
 
+A declaration occupies its line, or the final ledger field after the last `|`. Colons must attach group sigils directly (`Label:group`); a colon followed by whitespace is not a silent boundary and produces an invalid-label diagnostic. Put surrounding prose on a separate line or before a ledger `|`.
+
 Declarations can attach one or more group sigils to a dimensionless value. Aggregates see successful declarations above them only:
 
 ```text
@@ -75,6 +77,8 @@ Declarations can attach one or more group sigils to a dimensionless value. Aggre
 ```
 
 Available aggregates are `sum`, `count`, `avg`, `min`, and `max`. Comma-separated filters are OR; repeated filter clauses are AND. A fully negated clause complements its union, so `{!ob,!ls}` means “neither ob nor ls.” `sum` and `count` return zero for an empty selection; the other functions show an error. Unit-bearing conversions cannot be aggregated in this release.
+
+Numeric declarations retain their decimal presentation. Variable references and aggregates display at least the maximum decimal places contributed by their inputs, while `count` remains an integer. The decimal-precision setting remains the maximum displayed calculation precision.
 
 ### Errors
 

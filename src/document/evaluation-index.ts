@@ -2,6 +2,7 @@ import { AggregateExpression, parseAggregate } from '../calculations/aggregate';
 import { evaluateArithmetic } from '../calculations/arithmetic';
 import { parseDeclaration } from '../calculations/declarations';
 import { DocumentEvaluationIndex, EvaluatedValue, EvaluationContext, EvaluationOutcome, GroupMember, InlineSource } from '../calculations/types';
+import { scanInlineCode } from './scanner';
 
 export interface CompatibilityEvaluation {
 	kind: 'success';
@@ -17,27 +18,25 @@ export interface CompatibilityDiagnostic {
 }
 
 export interface DocumentEngineOptions {
-	formatNumber(value: number): string;
+	formatNumber(value: number, minimumDecimalPlaces?: number): string;
 	evaluateCompatibility?(source: string, variables: Map<string, EvaluatedValue>): CompatibilityEvaluation | CompatibilityDiagnostic | null;
 	marker?: string;
 	incorrectMarkers?: string[];
 }
 
 export function evaluateDocument(sourceText: string, options: DocumentEngineOptions): DocumentEvaluationIndex {
-	const context: EvaluationContext = { variables: new Map(), groups: new Map() };
+	const context: EvaluationContext = { variables: new Map(), variableLabels: new Map(), groups: new Map() };
 	const records: Array<{ source: InlineSource; outcome: EvaluationOutcome }> = [];
 	const byOffset = new Map<number, EvaluationOutcome>();
 	const declarations = new Map<number, InlineSource['declaration']>();
 	const unboundDeclarations = new Map<string, string>();
-	const pattern = /`([^`\n]+)`/g;
 	const marker = options.marker ?? '=';
 	const incorrectMarkers = (options.incorrectMarkers ?? []).filter((candidate) => candidate && candidate !== marker);
-	let match: RegExpExecArray | null;
 
-	while ((match = pattern.exec(sourceText)) !== null) {
-		const from = match.index;
-		const inline: InlineSource = { from, to: from + match[0].length, content: match[1] };
-		const trimmedContent = match[1].trimStart();
+	for (const span of scanInlineCode(sourceText)) {
+		const from = span.from;
+		const inline: InlineSource = { ...span };
+		const trimmedContent = span.content.trimStart();
 		if (!trimmedContent.startsWith(marker)) {
 			const incorrectMarker = incorrectMarkers.find((candidate) => trimmedContent.startsWith(candidate));
 			if (incorrectMarker) {
@@ -83,23 +82,27 @@ export function evaluateDocument(sourceText: string, options: DocumentEngineOpti
 				unboundDeclarations.set(inline.declaration.normalizedLabel, inline.declaration.label);
 				continue;
 			}
-			const unbound = Array.from(unboundDeclarations.entries()).find(([name]) => referencesLabel(expressionSource, name));
-			if (unbound) {
-				outcome = diagnostic('unbound-variable', `Variable "${unbound[1]}" is declared but has no calculated value.`, from);
-				if (inline.declaration) unboundDeclarations.set(inline.declaration.normalizedLabel, inline.declaration.label);
-				add(inline, outcome);
-				continue;
-			}
 			const compatibility = options.evaluateCompatibility?.(expressionSource, context.variables);
 			if (compatibility?.kind === 'success') {
 				outcome = { kind: 'success', value: compatibility.value, display: compatibility.display, consumeTrailingS: compatibility.consumeTrailingS };
 			} else if (compatibility?.kind === 'error') {
 				outcome = diagnostic(compatibility.code, compatibility.message, from);
 			} else {
-				const arithmetic = evaluateArithmetic(expressionSource.replace(/\s*=\s*$/, ''), context.variables);
-				outcome = arithmetic.kind === 'success'
-					? { kind: 'success', value: { kind: 'number', value: arithmetic.value }, display: options.formatNumber(arithmetic.value) }
-					: diagnostic(arithmetic.code, arithmetic.message, from);
+				const arithmetic = evaluateArithmetic(expressionSource.replace(/\s*=\s*$/, ''), context.variables, context.variableLabels);
+				if (arithmetic.kind === 'success') {
+					outcome = {
+						kind: 'success',
+						value: { kind: 'number', value: arithmetic.value, decimalPlaces: arithmetic.decimalPlaces },
+						display: options.formatNumber(arithmetic.value, arithmetic.decimalPlaces),
+					};
+				} else {
+					const unbound = arithmetic.code === 'unknown-variable'
+						? Array.from(unboundDeclarations.entries()).find(([name]) => referencesLabel(expressionSource, name))
+						: undefined;
+					outcome = unbound
+						? diagnostic('unbound-variable', `Variable "${unbound[1]}" is declared but has no calculated value.`, from)
+						: diagnostic(arithmetic.code, arithmetic.message, from);
+				}
 			}
 		}
 
@@ -134,6 +137,7 @@ function referencesLabel(expression: string, normalizedLabel: string): boolean {
 
 function declare(declaration: NonNullable<InlineSource['declaration']>, value: EvaluatedValue, context: EvaluationContext) {
 	context.variables.set(declaration.normalizedLabel, value);
+	context.variableLabels.set(declaration.normalizedLabel, declaration.label);
 	const member: GroupMember = { label: declaration.label, value, groups: declaration.groups, sourceOffset: declaration.sourceOffset };
 	for (const group of declaration.groups) {
 		const members = context.groups.get(group) ?? [];
@@ -149,7 +153,11 @@ function evaluateAggregate(
 	offset: number,
 ): EvaluationOutcome {
 	if (!context.groups.has(node.group)) {
-		return diagnostic('unknown-group', `Unknown group "${node.group}".`, offset);
+		const variableLabel = context.variableLabels.get(node.group);
+		const hint = variableLabel
+			? ` "${variableLabel}" is a variable; aggregates operate on group sigils. Tag entries with a sigil or reference "${options.marker ?? '='}${variableLabel}".`
+			: '';
+		return diagnostic('unknown-group', `Unknown group "${node.groupSource}".${hint}`, offset);
 	}
 	let members = context.groups.get(node.group) ?? [];
 	members = members.filter((member) => node.filters.every((filter) => {
@@ -159,6 +167,9 @@ function evaluateAggregate(
 	const quantity = members.find((member) => member.value.kind === 'quantity');
 	if (quantity) return diagnostic('quantity-aggregate', `Group "${node.group}" contains unit-bearing declaration "${quantity.label}".`, offset);
 	const values = members.map((member) => member.value.value);
+	const decimalPlaces = node.fn === 'count'
+		? 0
+		: members.reduce((maximum, member) => member.value.kind === 'number' ? Math.max(maximum, member.value.decimalPlaces) : maximum, 0);
 	let value: number;
 	switch (node.fn) {
 		case 'count': value = values.length; break;
@@ -171,7 +182,7 @@ function evaluateAggregate(
 			if (!values.length) return diagnostic('empty-aggregate', `Cannot take ${node.fn} of an empty selection.`, offset);
 			value = node.fn === 'min' ? Math.min(...values) : Math.max(...values); break;
 	}
-	return { kind: 'success', value: { kind: 'number', value }, display: options.formatNumber(value) };
+	return { kind: 'success', value: { kind: 'number', value, decimalPlaces }, display: options.formatNumber(value, decimalPlaces) };
 }
 
 function diagnostic(code: string, message: string, offset: number): EvaluationOutcome {

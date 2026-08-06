@@ -1,49 +1,76 @@
 import { normalizeLabel } from './normalize';
 import { EvaluatedValue } from './types';
 
-export type ArithmeticOutcome = { kind: 'success'; value: number } | { kind: 'error'; code: string; message: string };
+export type ArithmeticOutcome = { kind: 'success'; value: number; decimalPlaces: number } | { kind: 'error'; code: string; message: string };
 
-export function evaluateArithmetic(source: string, variables: Map<string, EvaluatedValue>): ArithmeticOutcome {
+export function evaluateArithmetic(source: string, variables: Map<string, EvaluatedValue>, variableLabels: Map<string, string> = new Map()): ArithmeticOutcome {
 	const resolved = resolveVariables(source, variables);
-	if (resolved.unknown) return { kind: 'error', code: 'unknown-variable', message: unknownVariableMessage(resolved.unknown, variables) };
+	if (resolved.unknown) return { kind: 'error', code: 'unknown-variable', message: unknownVariableMessage(resolved.unknown, variables, variableLabels) };
 	const parser = new Parser(resolved.expression);
 	const value = parser.parse();
 	if (value === null) return { kind: 'error', code: 'arithmetic-syntax', message: 'Malformed arithmetic expression.' };
 	if (!Number.isFinite(value)) return { kind: 'error', code: 'non-finite-result', message: 'The expression produced a non-finite result (possibly division by zero).' };
-	return { kind: 'success', value };
+	return { kind: 'success', value, decimalPlaces: resolved.decimalPlaces };
 }
 
-function resolveVariables(source: string, variables: Map<string, EvaluatedValue>): { expression: string; unknown?: string } {
+function resolveVariables(source: string, variables: Map<string, EvaluatedValue>): { expression: string; unknown?: string; decimalPlaces: number } {
 	let expression = source;
+	let decimalPlaces = maximumLiteralDecimalPlaces(source);
 	for (const [name, value] of Array.from(variables.entries()).sort((a, b) => b[0].length - a[0].length)) {
 		if (value.kind !== 'number') continue;
 		const pattern = name.split(/\s+/).map(escapeRegExp).join('\\s+');
-		expression = expression.replace(new RegExp(`(^|[^\\p{L}\\p{N}_])(${pattern})(?=$|[^\\p{L}\\p{N}_])`, 'giu'), (_m, prefix) => `${prefix}(${value.value})`);
+		expression = expression.replace(new RegExp(`(^|[^\\p{L}\\p{N}_])(${pattern})(?=$|[^\\p{L}\\p{N}_])`, 'giu'), (_m, prefix) => {
+			decimalPlaces = Math.max(decimalPlaces, value.decimalPlaces);
+			return `${prefix}(${value.value})`;
+		});
 	}
 	const identifier = expression.match(/[\p{L}_][\p{L}\p{N}_ ]*/u)?.[0].trim();
-	return identifier ? { expression, unknown: identifier } : { expression };
+	return identifier ? { expression, unknown: identifier, decimalPlaces } : { expression, decimalPlaces };
 }
 
-function unknownVariableMessage(raw: string, variables: Map<string, EvaluatedValue>): string {
+function unknownVariableMessage(raw: string, variables: Map<string, EvaluatedValue>, variableLabels: Map<string, string>): string {
 	const name = normalizeLabel(raw);
 	let best: { name: string; distance: number } | undefined;
+	let tied = false;
 	for (const known of variables.keys()) {
-		const distance = levenshtein(name, known);
-		if (!best || distance < best.distance) best = { name: known, distance };
+		const distance = damerauLevenshtein(name, known);
+		if (!best || distance < best.distance) {
+			best = { name: known, distance };
+			tied = false;
+		} else if (distance === best.distance) {
+			tied = true;
+		}
 	}
-	const suggestion = best && best.distance <= Math.max(2, Math.floor(name.length / 3)) ? ` Did you mean "${best.name}"?` : '';
+	const accepted = best && !tied && (best.distance <= 1 || (best.distance === 2 && best.name.length >= 5));
+	const suggestion = accepted && best ? ` Did you mean "${variableLabels.get(best.name) ?? best.name}"?` : '';
 	return `Unknown variable "${raw}".${suggestion}`;
 }
 
-function levenshtein(a: string, b: string): number {
-	const row = Array.from({ length: b.length + 1 }, (_, i) => i);
+function damerauLevenshtein(a: string, b: string): number {
+	const matrix = Array.from({ length: a.length + 1 }, () => Array<number>(b.length + 1).fill(0));
+	for (let i = 0; i <= a.length; i++) matrix[i][0] = i;
+	for (let j = 0; j <= b.length; j++) matrix[0][j] = j;
 	for (let i = 1; i <= a.length; i++) {
-		let previous = row[0]; row[0] = i;
 		for (let j = 1; j <= b.length; j++) {
-			const old = row[j]; row[j] = Math.min(row[j] + 1, row[j - 1] + 1, previous + (a[i - 1] === b[j - 1] ? 0 : 1)); previous = old;
+			matrix[i][j] = Math.min(
+				matrix[i - 1][j] + 1,
+				matrix[i][j - 1] + 1,
+				matrix[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1),
+			);
+			if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
+				matrix[i][j] = Math.min(matrix[i][j], matrix[i - 2][j - 2] + 1);
+			}
 		}
 	}
-	return row[b.length];
+	return matrix[a.length][b.length];
+}
+
+function maximumLiteralDecimalPlaces(source: string): number {
+	let maximum = 0;
+	for (const match of source.matchAll(/(?:^|[^\p{L}\p{N}_])(?:\d+\.(\d*)|\.(\d+))/gu)) {
+		maximum = Math.max(maximum, (match[1] ?? match[2] ?? '').length);
+	}
+	return maximum;
 }
 
 function escapeRegExp(value: string): string { return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }

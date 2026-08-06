@@ -1,5 +1,5 @@
 export type EvaluatedValue =
-	| { kind: 'number'; value: number }
+	| { kind: 'number'; value: number; decimalPlaces: number }
 	| { kind: 'quantity'; value: number; unit: string; dimension: string };
 
 export interface EvaluationDiagnostic {
@@ -30,6 +30,7 @@ export interface GroupMember {
 
 export interface EvaluationContext {
 	variables: Map<string, EvaluatedValue>;
+	variableLabels: Map<string, string>;
 	groups: Map<string, GroupMember[]>;
 }
 

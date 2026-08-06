@@ -1,5 +1,7 @@
 # Review of the Grouped Calculations Proposal
 
+> Historical review. `DESIGN_RECORD.md` is authoritative for settled behavior and current proposals.
+
 ## Scope
 
 This document reviews `GROUPED_CALCULATIONS.md` against the current behavior documented in the Obsidian Units `README`. It does not replace the proposal. Its purpose is to identify the parts that appear strong, the decisions that should be settled before implementation, and the details that can reasonably wait.
