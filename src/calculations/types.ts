@@ -1,6 +1,12 @@
+export interface ValueProvenance {
+	declarationIds: string[];
+	sourceOffsets: number[];
+	localAccumulationIds: string[];
+}
+
 export type EvaluatedValue =
-	| { kind: 'number'; value: number; decimalPlaces: number }
-	| { kind: 'quantity'; value: number; unit: string; dimension: string };
+	| { kind: 'number'; value: number; decimalPlaces: number; provenance?: ValueProvenance }
+	| { kind: 'quantity'; value: number; unit: string; dimension: string; provenance?: ValueProvenance };
 
 export interface EvaluationDiagnostic {
 	code: string;
@@ -17,15 +23,30 @@ export interface Declaration {
 	label: string;
 	normalizedLabel: string;
 	groups: string[];
+	localGroups: string[];
 	expressionSource: string;
 	sourceOffset: number;
 }
 
 export interface GroupMember {
+	declarationId: string;
 	label: string;
+	normalizedLabel: string;
 	value: EvaluatedValue;
 	groups: string[];
+	localAccumulationIds: string[];
 	sourceOffset: number;
+}
+
+export interface LocalAccumulation {
+	id: string;
+	group: string;
+	ordinal: number;
+	status: 'active' | 'completed';
+	members: GroupMember[];
+	openedAt: number;
+	closedAt?: number;
+	closedByDeclarationId?: string;
 }
 
 export interface EvaluationContext {

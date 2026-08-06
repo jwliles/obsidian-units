@@ -1,6 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { parseAggregate } from '../src/calculations/aggregate';
 import { parseDeclaration } from '../src/calculations/declarations';
+import { parseExpression } from '../src/calculations/expression-parser';
 import { evaluateDocument } from '../src/document/evaluation-index';
 import { scanInlineCode } from '../src/document/scanner';
 
@@ -36,6 +37,22 @@ assert.equal(parseDeclaration('first = `=1` second = ', '2', 0).kind, 'error');
 
 // Aggregate grammar.
 assert.equal(parseAggregate('sum:ex{ob,ls}{!late}').kind, 'success');
+const localAggregate = parseAggregate('sum::CAC{!late}');
+assert.equal(localAggregate.kind, 'success');
+if (localAggregate.kind === 'success') {
+	assert.equal(localAggregate.node.scope, 'local');
+	assert.equal(localAggregate.node.group, 'cac');
+	assert.equal(localAggregate.node.groupSource, 'CAC');
+}
+const localAst = parseExpression('sum::ex{gr}');
+assert.equal(localAst.kind, 'success');
+if (localAst.kind === 'success') {
+	assert.equal(localAst.node.kind, 'aggregate');
+	if (localAst.node.kind === 'aggregate') assert.equal(localAst.node.scope, 'local');
+}
+const scalarAst = parseExpression('CAC * 2');
+assert.equal(scalarAst.kind, 'success');
+if (scalarAst.kind === 'success') assert.equal(scalarAst.node.kind, 'scalar');
 assert.equal(parseAggregate('sum:ex{ob,!late}').kind, 'error');
 const mixedFilter = parseAggregate('sum:ex{ob,!late}');
 if (mixedFilter.kind === 'error') assert.match(mixedFilter.message, /separate clauses/);

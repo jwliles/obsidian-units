@@ -1,6 +1,7 @@
-import { AggregateExpression, parseAggregate } from '../calculations/aggregate';
+import { AggregateExpressionNode } from '../calculations/ast';
 import { evaluateArithmetic } from '../calculations/arithmetic';
 import { parseDeclaration } from '../calculations/declarations';
+import { parseExpression } from '../calculations/expression-parser';
 import { DocumentEvaluationIndex, EvaluatedValue, EvaluationContext, EvaluationOutcome, GroupMember, InlineSource } from '../calculations/types';
 import { scanInlineCode } from './scanner';
 
@@ -66,12 +67,14 @@ export function evaluateDocument(sourceText: string, options: DocumentEngineOpti
 			declarations.set(from, inline.declaration);
 		}
 
-		const aggregate = parseAggregate(expressionSource);
+		const parsedExpression = parseExpression(expressionSource);
 		let outcome: EvaluationOutcome;
-		if (aggregate.kind === 'error') {
-			outcome = diagnostic('aggregate-syntax', aggregate.message, from);
-		} else if (aggregate.kind === 'success') {
-			outcome = evaluateAggregate(aggregate.node, context, options, from);
+		if (parsedExpression.kind === 'error') {
+			outcome = diagnostic(parsedExpression.code, parsedExpression.message, from);
+		} else if (parsedExpression.node.kind === 'aggregate') {
+			outcome = parsedExpression.node.scope === 'local'
+				? diagnostic('local-scope-not-implemented', 'Local aggregate evaluation is not implemented yet.', from)
+				: evaluateAggregate(parsedExpression.node, context, options, from);
 			if (inline.declaration && inline.declaration.groups.length > 0 && outcome.kind === 'success') {
 				outcome = diagnostic('aggregate-group-membership', 'Aggregate results cannot be attached to groups.', from);
 			}
@@ -136,9 +139,24 @@ function referencesLabel(expression: string, normalizedLabel: string): boolean {
 }
 
 function declare(declaration: NonNullable<InlineSource['declaration']>, value: EvaluatedValue, context: EvaluationContext) {
-	context.variables.set(declaration.normalizedLabel, value);
+	const declarationId = `declaration@${declaration.sourceOffset}`;
+	const provenance = {
+		declarationIds: Array.from(new Set([...(value.provenance?.declarationIds ?? []), declarationId])),
+		sourceOffsets: Array.from(new Set([...(value.provenance?.sourceOffsets ?? []), declaration.sourceOffset])),
+		localAccumulationIds: value.provenance?.localAccumulationIds ?? [],
+	};
+	const declaredValue: EvaluatedValue = { ...value, provenance };
+	context.variables.set(declaration.normalizedLabel, declaredValue);
 	context.variableLabels.set(declaration.normalizedLabel, declaration.label);
-	const member: GroupMember = { label: declaration.label, value, groups: declaration.groups, sourceOffset: declaration.sourceOffset };
+	const member: GroupMember = {
+		declarationId,
+		label: declaration.label,
+		normalizedLabel: declaration.normalizedLabel,
+		value: declaredValue,
+		groups: declaration.groups,
+		localAccumulationIds: declaration.localGroups,
+		sourceOffset: declaration.sourceOffset,
+	};
 	for (const group of declaration.groups) {
 		const members = context.groups.get(group) ?? [];
 		members.push(member);
@@ -147,7 +165,7 @@ function declare(declaration: NonNullable<InlineSource['declaration']>, value: E
 }
 
 function evaluateAggregate(
-	node: AggregateExpression,
+	node: AggregateExpressionNode,
 	context: EvaluationContext,
 	options: DocumentEngineOptions,
 	offset: number,
@@ -167,11 +185,11 @@ function evaluateAggregate(
 	const quantity = members.find((member) => member.value.kind === 'quantity');
 	if (quantity) return diagnostic('quantity-aggregate', `Group "${node.group}" contains unit-bearing declaration "${quantity.label}".`, offset);
 	const values = members.map((member) => member.value.value);
-	const decimalPlaces = node.fn === 'count'
+	const decimalPlaces = node.function === 'count'
 		? 0
 		: members.reduce((maximum, member) => member.value.kind === 'number' ? Math.max(maximum, member.value.decimalPlaces) : maximum, 0);
 	let value: number;
-	switch (node.fn) {
+	switch (node.function) {
 		case 'count': value = values.length; break;
 		case 'sum': value = values.reduce((sum, item) => sum + item, 0); break;
 		case 'avg':
@@ -179,8 +197,8 @@ function evaluateAggregate(
 			value = values.reduce((sum, item) => sum + item, 0) / values.length; break;
 		case 'min':
 		case 'max':
-			if (!values.length) return diagnostic('empty-aggregate', `Cannot take ${node.fn} of an empty selection.`, offset);
-			value = node.fn === 'min' ? Math.min(...values) : Math.max(...values); break;
+			if (!values.length) return diagnostic('empty-aggregate', `Cannot take ${node.function} of an empty selection.`, offset);
+			value = node.function === 'min' ? Math.min(...values) : Math.max(...values); break;
 	}
 	return { kind: 'success', value: { kind: 'number', value, decimalPlaces }, display: options.formatNumber(value, decimalPlaces) };
 }

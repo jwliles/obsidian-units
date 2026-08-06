@@ -84,33 +84,51 @@ whether classification is retroactive are not yet settled. This proposal is
 related to local scope but is not required to understand the CAC example
 above.
 
-## Open questions
+## Local accumulation model
 
-1. What aggregate syntax reads the current or most recently completed local
-   accumulation?
-2. Does an intervening declaration with a different label affect an open local
-   CAC accumulation, or is closure controlled only by the next CAC
-   declaration?
-3. How do multiple local qualifiers on one declaration behave?
+The following rules resolve the initial implementation model. They are pinned
+by `tests/04-local-scopes.md` before evaluator implementation.
 
-   ```markdown
-   CAC:cac:ex = `=135.00`
-   ```
+- Local accumulations are keyed by normalized qualifier, not by Markdown
+  region. `:cac` and `:ex` are independent local selections.
+- A qualified declaration contributes to every qualifier it names:
 
-4. How does one local expense accumulation include different labels such as
-   CAC, Walmart, and OG&E without relying on Markdown boundaries?
-5. Does end-of-file implicitly close an open local accumulation, and can an
-   open accumulation still be queried before closure?
-6. Are local names and global group names separate namespaces?
-7. How are completed local accumulations identified if a later aggregate needs
-   to include or exclude one of them?
-8. How do filters apply to local accumulations?
-9. What diagnostics should be produced for a local aggregate when no matching
-   local accumulation exists?
+  ```markdown
+  CAC:cac:ex = `=135.00`
+  ```
 
-## Next design test
+  contributes the same declaration to the active local `cac` and `ex`
+  accumulations.
+- Different labels can share a qualifier. `CAC:ex`, `Walmart:ex`, and
+  `Aldi:ex` contribute to the same active local `ex` accumulation.
+- A declaration with a given label remembers the qualifiers used by its most
+  recent successful qualified declaration. A later successful declaration of
+  the same label that omits one of those qualifiers closes that entire shared
+  local accumulation after the new declaration evaluates. Declarations with
+  unrelated labels do not close it.
+- A later declaration using a closed qualifier opens a fresh accumulation with
+  a new stable accumulation identifier.
+- `sum::name`, `count::name`, `avg::name`, `min::name`, and `max::name` read
+  the active local accumulation. If none is active, they read the most recently
+  completed accumulation. Aggregates do not themselves close scope.
+- Filters apply to the selected local accumulation using the existing filter
+  semantics.
+- End-of-file implicitly completes every active accumulation for provenance
+  and trace purposes. Results already evaluated remain unchanged.
+- A local aggregate with neither an active nor a completed matching
+  accumulation produces `Unknown local group "name".`
+- The initial implementation exposes only the active or most recently
+  completed accumulation. Naming and selecting older completed accumulations
+  remains future design work.
 
-Before implementation, add a characterization fixture containing:
+These rules intentionally preserve the core CAC behavior while making a local
+expense qualifier usable across several vendor labels. The separate
+global-group-classification proposal remains undecided and is not required for
+the first local evaluator.
+
+## Characterization fixture
+
+`tests/04-local-scopes.md` contains:
 
 - two qualified CAC payments;
 - a local CAC subtotal;
