@@ -3,7 +3,7 @@ import { pathToFileURL } from 'node:url';
 
 const outdir = `/tmp/obsidian-units-tests-${process.pid}`;
 await build({
-	entryPoints: ['tests/calculations.test.ts', 'tests/compatibility.test.ts', 'tests/fixtures.test.ts'],
+	entryPoints: ['tests/calculations.test.ts', 'tests/compatibility.test.ts', 'tests/fixtures.test.ts', 'tests/local-scopes.acceptance.ts'],
 	bundle: true,
 	platform: 'node',
 	format: 'esm',
@@ -20,3 +20,4 @@ await build({
 await import(pathToFileURL(`${outdir}/calculations.test.js`).href);
 await import(pathToFileURL(`${outdir}/compatibility.test.js`).href);
 await import(pathToFileURL(`${outdir}/fixtures.test.js`).href);
+await import(pathToFileURL(`${outdir}/local-scopes.acceptance.js`).href);

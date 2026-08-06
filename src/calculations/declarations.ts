@@ -40,7 +40,7 @@ export function parseDeclaration(prefix: string, expressionSource: string, sourc
 
 	return {
 		kind: 'success',
-		declaration: { label, normalizedLabel: normalizeLabel(label), groups, localGroups: [], expressionSource, sourceOffset },
+		declaration: { label, normalizedLabel: normalizeLabel(label), groups, localGroups: [...groups], expressionSource, sourceOffset },
 	};
 }
 

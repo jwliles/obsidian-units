@@ -159,11 +159,11 @@ fixture ledger.
 # Part II — Scope tiers and intervals (Superseded exploration)
 
 The `::group` declaration tiers and explicit terminators below are retained as
-historical design exploration. They are not the current local-scope candidate.
+historical design exploration. They are not the implemented local-scope model.
 `LOCAL_SCOPES_DESIGN.md` records the active model and its executable acceptance
-fixture. In that model, qualified declarations accumulate locally and returning
-the same label to an unqualified declaration closes its preceding local
-accumulations without involving Markdown structure.
+fixture. Qualified declarations accumulate locally and returning the same label
+to an unqualified declaration closes its preceding local accumulations without
+involving Markdown structure. Local aggregates use `function::group`.
 
 ## Motivation
 

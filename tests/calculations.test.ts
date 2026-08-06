@@ -152,4 +152,12 @@ assert.equal(customMarker[2].kind, 'success');
 
 assert.deepEqual(scanInlineCode('`=1`\n<!-- `=2` -->\n```md\n`=3`\n```\n`=4`').map((span) => span.content), ['=1', '=4']);
 
+const localFunctions = outcomes('A:g = `=1.00`\nB:g = `=3.00`\n`=avg::g`\n`=min::g`\n`=max::g`');
+assert.equal(localFunctions[2].kind === 'success' ? localFunctions[2].value.value : NaN, 2);
+assert.equal(localFunctions[3].kind === 'success' ? localFunctions[3].value.value : NaN, 1);
+assert.equal(localFunctions[4].kind === 'success' ? localFunctions[4].value.value : NaN, 3);
+if (localFunctions[2].kind === 'success') {
+	assert.deepEqual(localFunctions[2].value.provenance?.localAccumulationIds, ['local:g:1']);
+}
+
 console.log('All grouped calculation tests passed.');

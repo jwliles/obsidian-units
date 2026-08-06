@@ -1,11 +1,5 @@
 /**
- * Pending local-scope evaluator acceptance test.
- *
- * This file is type-checked by the production build but is intentionally not
- * imported by run-tests.mjs until local accumulation evaluation is
- * implemented. Calling runLocalScopeAcceptance now should fail, which keeps
- * the desired behavior executable without breaking the existing regression
- * gate before implementation begins.
+ * Local-scope evaluator acceptance test backed by 04-local-scopes.md.
  */
 import { strict as assert } from 'node:assert';
 import { readFileSync } from 'node:fs';
@@ -35,6 +29,9 @@ export function runLocalScopeAcceptance(): void {
 	}
 	assert.ok(assertions >= 10, `Expected at least 10 local-scope assertions, found ${assertions}`);
 }
+
+runLocalScopeAcceptance();
+console.log('All local-scope acceptance tests passed.');
 
 function formatNumber(value: number, minimumDecimalPlaces = 0): string {
 	let result = value.toFixed(4).replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');

@@ -53,6 +53,14 @@ export interface EvaluationContext {
 	variables: Map<string, EvaluatedValue>;
 	variableLabels: Map<string, string>;
 	groups: Map<string, GroupMember[]>;
+	local: LocalEvaluationContext;
+}
+
+export interface LocalEvaluationContext {
+	active: Map<string, LocalAccumulation>;
+	completed: Map<string, LocalAccumulation[]>;
+	nextOrdinal: Map<string, number>;
+	qualifiersByLabel: Map<string, string[]>;
 }
 
 export interface InlineSource {
