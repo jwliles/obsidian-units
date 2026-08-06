@@ -4,7 +4,7 @@ Soulver-style inline unit conversions for Obsidian notes.
 
 ## Usage
 
-Prefix a conversion or calculation with `=` inside inline code to show the result automatically:
+Prefix a conversion or calculation with the configured expression marker inside inline code to show the result automatically. The default marker is `=`:
 
 ```text
 I need `=33 meters to feet` of lumber.
@@ -25,6 +25,8 @@ Inline render modes:
 - `=33 meters to feet | unit` renders only the target unit name.
 
 Ordinary inline code such as `npm run build` is never treated as a calculation.
+
+The expression marker can be changed in **Settings → Obsidian Units → Expression marker**, for example from `=` to `~` when another plugin owns `=`. Exactly one marker is active. Declarations written with the previous marker remain declarations but have no calculated value and display an incorrect-marker diagnostic. Use **Update Units markers in current file** from the command palette to update recognized declarations, aggregates, and conversions; ambiguous standalone arithmetic is reported and left unchanged.
 
 For editors that auto-pair backticks, a trailing plural `s` after the inline code is tolerated:
 
@@ -103,6 +105,7 @@ You can also select an expression inside a larger line and convert only the sele
 
 - **Convert units in selection or current line** replaces the selected expression, or the current line if there is no selection.
 - **Insert unit conversion result only** inserts only the result at the cursor or over the current selection.
+- **Update Units markers in current file** replaces the previous marker with the configured marker in recognized Units expressions after confirmation.
 
 ## Supported Categories
 

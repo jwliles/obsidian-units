@@ -1,5 +1,5 @@
 import { strict as assert } from 'node:assert';
-import { DEFAULT_SETTINGS, diagnoseConversion, evaluateCompatibilityExpression, evaluateInlineExpressionFallback, parseConversion } from '../main';
+import { DEFAULT_SETTINGS, diagnoseConversion, evaluateCompatibilityExpression, evaluateInlineExpressionFallback, isValidExpressionMarker, parseConversion, planMarkerUpdate } from '../main';
 import { evaluateDocument } from '../src/document/evaluation-index';
 
 const settings = { ...DEFAULT_SETTINGS, densities: [] };
@@ -40,5 +40,23 @@ if (diagnostic.kind === 'error') {
 	assert.equal(diagnostic.diagnostic.code, 'conversion-error');
 	assert.match(diagnostic.diagnostic.message, /Unknown unit/);
 }
+
+assert.equal(isValidExpressionMarker('~'), true);
+assert.equal(isValidExpressionMarker('u:'), true);
+assert.equal(isValidExpressionMarker(''), false);
+assert.equal(isValidExpressionMarker('not valid'), false);
+const markerUpdate = planMarkerUpdate([
+	'CAC:ex = `=200`',
+	'`=sum:ex`',
+	'`=30 ft to m`',
+	'`=2 + 2`',
+	'`=this.file.name`',
+].join('\n'), '=', '~', settings);
+assert.equal(markerUpdate.changed, 3);
+assert.equal(markerUpdate.ambiguous, 2);
+assert.match(markerUpdate.text, /CAC:ex = `~200`/);
+assert.match(markerUpdate.text, /`~sum:ex`/);
+assert.match(markerUpdate.text, /`~30 ft to m`/);
+assert.match(markerUpdate.text, /`=2 \+ 2`/);
 
 console.log('All compatibility and diagnostic tests passed.');

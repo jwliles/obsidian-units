@@ -8,7 +8,7 @@ This document reviews `GROUPED_CALCULATIONS.md` against the current behavior doc
 
 The proposal is a strong direction for Obsidian Units.
 
-The leading `=` marker is worth the breaking change because it gives the plugin an explicit ownership boundary:
+An explicit, configurable marker gives the plugin an ownership boundary; the default is `=`:
 
 ```markdown
 `10 / 2`   <!-- ordinary inline code -->
@@ -30,7 +30,7 @@ That preserves the existing top-to-bottom reassignment model while allowing repe
 
 The following parts of the proposal should remain unless implementation reveals a concrete problem:
 
-1. Every inline expression owned by Obsidian Units begins with `=`.
+1. Every inline expression owned by Obsidian Units begins with the configured marker, defaulting to `=`.
 2. Named declarations use `:` rather than a second `=`.
 3. A declaration may attach the value to one or more groups.
 4. Aggregate functions operate on previously evaluated group members.
@@ -251,7 +251,7 @@ The additional fields support diagnostics, later filtering, inspection, and sour
 
 Traverse explicit expressions in document order:
 
-1. Identify an inline code span whose content begins with `=`.
+1. Identify an inline code span whose content begins with the configured marker.
 2. Inspect the immediately preceding text for an optional declaration.
 3. Parse the display label, group sigils, and declaration delimiter.
 4. Evaluate the expression using the current top-down context.
@@ -380,7 +380,7 @@ The following can wait:
 
 ## Recommended decisions in compact form
 
-1. Keep the explicit `=` marker.
+1. Keep one explicit, configurable marker with `=` as the default.
 2. Keep `:` declarations and chained group sigils.
 3. Allow prose labels, but initially expose only identifier-safe labels as variables.
 4. Restrict the first aggregate implementation to dimensionless values.

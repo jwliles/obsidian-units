@@ -2,6 +2,7 @@ import { App, Editor, MarkdownPostProcessorContext, MarkdownView, Modal, Notice,
 import { Prec, Range, StateEffect, StateField } from '@codemirror/state';
 import { Decoration, DecorationSet, EditorView, ViewPlugin, ViewUpdate, WidgetType } from '@codemirror/view';
 import { DocumentEvaluationIndex, EvaluatedValue } from './src/calculations/types';
+import { parseAggregate } from './src/calculations/aggregate';
 import { evaluateDocument } from './src/document/evaluation-index';
 
 type UnitDisplayForm = 'abbr' | 'name';
@@ -15,6 +16,8 @@ interface DensityEntry {
 interface ObsidianUnitsSettings {
 	precision: number;
 	renderInLivePreviewByDefault: boolean;
+	expressionMarker: string;
+	previousExpressionMarker: string;
 	unitDisplayOverrides: Record<string, UnitDisplayForm>;
 	densities: DensityEntry[];
 }
@@ -22,6 +25,8 @@ interface ObsidianUnitsSettings {
 export const DEFAULT_SETTINGS: ObsidianUnitsSettings = {
 	precision: 4,
 	renderInLivePreviewByDefault: true,
+	expressionMarker: '=',
+	previousExpressionMarker: '=',
 	unitDisplayOverrides: {},
 	densities: [],
 };
@@ -836,6 +841,12 @@ export default class ObsidianUnitsPlugin extends Plugin {
 			},
 		});
 
+		this.addCommand({
+			id: 'update-units-markers-in-current-file',
+			name: 'Update Units markers in current file',
+			editorCallback: (editor: Editor) => this.updateMarkersInCurrentFile(editor),
+		});
+
 		this.addSettingTab(new ObsidianUnitsSettingTab(this.app, this));
 		this.registerEditorExtension([this.livePreviewRenderingField, Prec.highest(createObsidianUnitsLivePreviewExtension(this))]);
 		this.registerMarkdownPostProcessor((element, ctx) => renderInlineCodeConversions(element, ctx, this));
@@ -843,6 +854,8 @@ export default class ObsidianUnitsPlugin extends Plugin {
 
 	async loadSettings() {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		if (!isValidExpressionMarker(this.settings.expressionMarker)) this.settings.expressionMarker = DEFAULT_SETTINGS.expressionMarker;
+		if (!isValidExpressionMarker(this.settings.previousExpressionMarker)) this.settings.previousExpressionMarker = this.settings.expressionMarker;
 	}
 
 	async saveSettings() {
@@ -854,16 +867,36 @@ export default class ObsidianUnitsPlugin extends Plugin {
 	}
 
 	evaluateDocument(source: string): DocumentEvaluationIndex {
-		const settingsKey = JSON.stringify([this.settings.precision, this.settings.unitDisplayOverrides, this.settings.densities]);
+		const settingsKey = JSON.stringify([this.settings.precision, this.settings.expressionMarker, this.settings.previousExpressionMarker, this.settings.unitDisplayOverrides, this.settings.densities]);
 		if (this.evaluationCache?.source === source && this.evaluationCache.settingsKey === settingsKey) {
 			return this.evaluationCache.index;
 		}
 		const index = evaluateDocument(source, {
 			formatNumber: (value) => formatNumber(value, this.settings.precision),
 			evaluateCompatibility: (expression, values) => evaluateCompatibilityExpression(expression, values, this.settings),
+			marker: this.settings.expressionMarker,
+			incorrectMarkers: [this.settings.previousExpressionMarker, DEFAULT_SETTINGS.expressionMarker],
 		});
 		this.evaluationCache = { source, settingsKey, index };
 		return index;
+	}
+
+	private updateMarkersInCurrentFile(editor: Editor) {
+		const from = this.settings.previousExpressionMarker;
+		const to = this.settings.expressionMarker;
+		if (from === to) {
+			new Notice('The previous and current Units markers are the same.');
+			return;
+		}
+		const update = planMarkerUpdate(editor.getValue(), from, to, this.settings);
+		if (update.changed === 0) {
+			new Notice(`No recognized Units expressions use the marker "${from}". ${update.ambiguous} ambiguous span(s) were left unchanged.`);
+			return;
+		}
+		new MarkerUpdateConfirmModal(this.app, from, to, update, () => {
+			editor.setValue(update.text);
+			new Notice(`Updated ${update.changed} Units marker(s). ${update.ambiguous} ambiguous span(s) were left unchanged.`);
+		}).open();
 	}
 
 	isLivePreviewRenderingEnabled(view: EditorView): boolean {
@@ -1671,23 +1704,20 @@ function createObsidianUnitsLivePreviewExtension(plugin: ObsidianUnitsPlugin) {
 
 function collectVariables(text: string, settings: ObsidianUnitsSettings): VariableMap {
 	const variables: VariableMap = new Map();
-	const rawAssignmentPattern = /^\s*(?:[-*]\s*)?(.+?)\s*=\s*(-?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)(?:\s|$)/i;
 	const inlineCodePattern = /`([^`\n]+)`/g;
 
 	for (const line of text.split('\n')) {
-		const rawMatch = line.match(rawAssignmentPattern);
-		if (rawMatch) {
-			setVariable(variables, rawMatch[1], Number(rawMatch[2]));
-		}
-
 		let match: RegExpExecArray | null;
 		while ((match = inlineCodePattern.exec(line)) !== null) {
+			const content = match[1].trimStart();
+			if (!content.startsWith(settings.expressionMarker)) continue;
 			const variableName = extractAssignmentName(line.slice(0, match.index));
 			if (!variableName) {
 				continue;
 			}
 
-			const inlineEvaluation = evaluateInlineExpressionFallback(match[1], settings, variables, true);
+			const expression = content.slice(settings.expressionMarker.length).trim();
+			const inlineEvaluation = evaluateInlineExpressionFallback(expression, settings, variables, true);
 			if (!inlineEvaluation) {
 				continue;
 			}
@@ -1794,22 +1824,24 @@ async function renderInlineCodeConversions(element: HTMLElement, ctx: MarkdownPo
 		.filter((codeElement) => !codeElement.closest('pre'));
 	const sectionInfo = ctx.getSectionInfo(element);
 	const sourceText = await getSourceText(ctx, plugin);
-	const sectionInlineMatches = sectionInfo
-		? Array.from(sectionInfo.text.matchAll(/`([^`\n]+)`/g))
-		: [];
 	const sectionStartOffset = sourceText && sectionInfo
 		? getLineStartOffset(sourceText, sectionInfo.lineStart)
 		: null;
+	const sectionEndOffset = sourceText && sectionInfo
+		? getLineStartOffset(sourceText, sectionInfo.lineEnd + 1)
+		: null;
 	const evaluationIndex = sourceText ? plugin.evaluateDocument(sourceText) : null;
+	const sectionEntries = evaluationIndex && sectionStartOffset !== null && sectionEndOffset !== null
+		? evaluationIndex.entries().filter(({ source }) => source.from >= sectionStartOffset && source.from < sectionEndOffset)
+		: [];
+	let entryCursor = 0;
 
-	for (let index = 0; index < codeElements.length; index++) {
-		const codeElement = codeElements[index];
-		const sourceMatch = sectionInlineMatches[index];
+	for (const codeElement of codeElements) {
 		const codeText = codeElement.textContent ?? '';
-		const sourceOffset = sectionStartOffset !== null && sourceMatch?.index !== undefined
-			? sectionStartOffset + sourceMatch.index
-			: null;
-		const outcome = sourceOffset !== null ? evaluationIndex?.outcomeAt(sourceOffset) : undefined;
+		const entryIndex = sectionEntries.findIndex((entry, index) => index >= entryCursor && entry.source.content === codeText);
+		if (entryIndex < 0) continue;
+		entryCursor = entryIndex + 1;
+		const outcome = sectionEntries[entryIndex].outcome;
 		if (!outcome || outcome.kind === 'not-applicable') {
 			continue;
 		}
@@ -1884,6 +1916,69 @@ function consumeNextTextPrefix(element: HTMLElement, prefix: string) {
 	}
 }
 
+export function isValidExpressionMarker(marker: string): boolean {
+	return marker.length > 0 && marker.length <= 16 && !/[\s`]/u.test(marker);
+}
+
+export interface MarkerUpdatePlan {
+	text: string;
+	changed: number;
+	ambiguous: number;
+}
+
+export function planMarkerUpdate(source: string, from: string, to: string, settings: ObsidianUnitsSettings): MarkerUpdatePlan {
+	if (!isValidExpressionMarker(from) || !isValidExpressionMarker(to) || from === to) {
+		return { text: source, changed: 0, ambiguous: 0 };
+	}
+	let changed = 0;
+	let ambiguous = 0;
+	const text = source.replace(/`([^`\n]+)`/g, (whole, content: string, offset: number) => {
+		const leadingWhitespace = content.slice(0, content.length - content.trimStart().length);
+		const trimmed = content.trimStart();
+		if (!trimmed.startsWith(from)) return whole;
+		const expression = trimmed.slice(from.length).trim();
+		const declaration = extractAssignmentName(source.slice(0, offset)) !== null;
+		const aggregate = parseAggregate(expression).kind === 'success';
+		const conversion = parseConversion(expression, settings) !== null;
+		if (!declaration && !aggregate && !conversion) {
+			ambiguous++;
+			return whole;
+		}
+		changed++;
+		return `\`${leadingWhitespace}${to}${trimmed.slice(from.length)}\``;
+	});
+	return { text, changed, ambiguous };
+}
+
+class MarkerUpdateConfirmModal extends Modal {
+	constructor(
+		app: App,
+		private readonly from: string,
+		private readonly to: string,
+		private readonly update: MarkerUpdatePlan,
+		private readonly applyUpdate: () => void,
+	) {
+		super(app);
+	}
+
+	onOpen(): void {
+		this.contentEl.createEl('h3', { text: 'Update Units markers?' });
+		this.contentEl.createEl('p', {
+			text: `${this.update.changed} recognized Units expression(s) will change from “${this.from}” to “${this.to}”. ${this.update.ambiguous} ambiguous span(s) will remain unchanged.`,
+		});
+		new Setting(this.contentEl)
+			.addButton((button) => button.setButtonText('Cancel').onClick(() => this.close()))
+			.addButton((button) => button.setButtonText('Update markers').setCta().onClick(() => {
+				this.applyUpdate();
+				this.close();
+			}));
+	}
+
+	onClose(): void {
+		this.contentEl.empty();
+	}
+}
+
 class ObsidianUnitsResultWidget extends WidgetType {
 	constructor(private readonly text: string, private readonly generation: number) {
 		super();
@@ -1951,6 +2046,26 @@ class ObsidianUnitsSettingTab extends PluginSettingTab {
 					this.plugin.settings.precision = value;
 					await this.plugin.saveSettings();
 				}));
+
+		new Setting(containerEl)
+			.setName('Expression marker')
+			.setDesc('The exact marker that identifies Units expressions. Changing it disables the previous marker until the file is updated with the command palette.')
+			.addText((text) => {
+				text.setValue(this.plugin.settings.expressionMarker);
+				text.inputEl.addEventListener('blur', async () => {
+					const marker = text.getValue();
+					if (!isValidExpressionMarker(marker)) {
+						new Notice('The Units marker must be 1–16 characters and cannot contain whitespace or backticks.');
+						text.setValue(this.plugin.settings.expressionMarker);
+						return;
+					}
+					if (marker === this.plugin.settings.expressionMarker) return;
+					this.plugin.settings.previousExpressionMarker = this.plugin.settings.expressionMarker;
+					this.plugin.settings.expressionMarker = marker;
+					await this.plugin.saveSettings();
+					this.plugin.refreshAllLivePreviews();
+				});
+			});
 
 		new Setting(containerEl)
 			.setName('Render in Live Preview by default')

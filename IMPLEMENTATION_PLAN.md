@@ -10,9 +10,11 @@ The implementation should establish one pure calculation engine shared by every 
 
 The implementation targets these decisions:
 
-- Inline expressions owned by Obsidian Units must begin with `=`.
+- Inline expressions owned by Obsidian Units must begin with the configured expression marker, which defaults to `=`.
 - Named declarations retain `LABEL[:SIGIL...] = \`=EXPRESSION\``.
-- Ordinary inline code without the leading marker is ignored.
+- Ordinary inline code without the configured marker is ignored.
+- Exactly one marker is active; changing it makes the previous marker invalid for evaluation.
+- A declaration using the previous marker remains a declaration but has no calculated value or group membership and receives an incorrect-marker diagnostic.
 - Labels remain human-readable and may contain spaces or punctuation already supported by variable resolution.
 - `=` is always structural and is explicitly rejected inside variable labels.
 - Literal colons inside labels are rejected initially.
@@ -199,7 +201,7 @@ interface EvaluationContext {
 
 ### Work
 
-1. Parse only inline code spans whose content begins with `=` as explicit expressions.
+1. Parse only inline code spans whose content begins with the configured marker as explicit expressions.
 2. Parse an optional declaration from the text immediately preceding the code span.
 3. Recognize the whitespace-surrounded assignment `=` immediately before the explicit code span and parse the trimmed declaration prefix to its left.
 4. Separate a possibly multiword label from zero or more attached `:sigil` references.
@@ -213,6 +215,7 @@ interface EvaluationContext {
    - Structural delimiters or whitespace inside sigils.
    - Sigils beyond the chosen length limit.
 8. Treat list markers, dates, pipes, and trailing notes as surrounding presentation rather than required syntax.
+9. Diagnose declarations that use the previous marker and retain their unbound declaration identity.
 
 ### Representative tests
 
@@ -454,6 +457,10 @@ Tests are added throughout every phase; this phase closes coverage gaps and veri
 
 ## Phase 6: Documentation
 
+### Marker update command
+
+Add an active-file command that replaces the previous marker with the configured marker in recognized Units declarations, aggregates, and conversions. Preview counts before applying, and report ambiguous standalone expressions without changing them.
+
 ### Documentation
 
 1. Replace implicit-expression examples in `README.md`.
@@ -461,7 +468,8 @@ Tests are added throughout every phase; this phase closes coverage gaps and veri
 3. Show both terse and descriptive sigils.
 4. Explain that grouped values are dimensionless in the first release.
 5. Document preserved command behavior.
-6. Retain `GROUPED_CALCULATIONS.md` as the design rationale or mark it implemented once behavior matches it.
+6. Document the marker setting, portability implications, incorrect-marker diagnostic, and active-file update command.
+7. Retain `GROUPED_CALCULATIONS.md` as the design rationale or mark it implemented once behavior matches it.
 
 ### Exit criteria
 

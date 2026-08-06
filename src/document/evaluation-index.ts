@@ -19,6 +19,8 @@ export interface CompatibilityDiagnostic {
 export interface DocumentEngineOptions {
 	formatNumber(value: number): string;
 	evaluateCompatibility?(source: string, variables: Map<string, EvaluatedValue>): CompatibilityEvaluation | CompatibilityDiagnostic | null;
+	marker?: string;
+	incorrectMarkers?: string[];
 }
 
 export function evaluateDocument(sourceText: string, options: DocumentEngineOptions): DocumentEvaluationIndex {
@@ -26,18 +28,34 @@ export function evaluateDocument(sourceText: string, options: DocumentEngineOpti
 	const records: Array<{ source: InlineSource; outcome: EvaluationOutcome }> = [];
 	const byOffset = new Map<number, EvaluationOutcome>();
 	const declarations = new Map<number, InlineSource['declaration']>();
+	const unboundDeclarations = new Map<string, string>();
 	const pattern = /`([^`\n]+)`/g;
+	const marker = options.marker ?? '=';
+	const incorrectMarkers = (options.incorrectMarkers ?? []).filter((candidate) => candidate && candidate !== marker);
 	let match: RegExpExecArray | null;
 
 	while ((match = pattern.exec(sourceText)) !== null) {
 		const from = match.index;
 		const inline: InlineSource = { from, to: from + match[0].length, content: match[1] };
-		if (!/^\s*=/.test(match[1])) {
+		const trimmedContent = match[1].trimStart();
+		if (!trimmedContent.startsWith(marker)) {
+			const incorrectMarker = incorrectMarkers.find((candidate) => trimmedContent.startsWith(candidate));
+			if (incorrectMarker) {
+				const staleExpression = trimmedContent.slice(incorrectMarker.length).trim();
+				const staleDeclaration = parseDeclaration(sourceText.slice(0, from), staleExpression, from);
+				if (staleDeclaration.kind === 'success') {
+					inline.declaration = staleDeclaration.declaration;
+					declarations.set(from, inline.declaration);
+					unboundDeclarations.set(inline.declaration.normalizedLabel, inline.declaration.label);
+					add(inline, diagnostic('incorrect-marker', `Incorrect Units marker "${incorrectMarker}". This vault uses "${marker}".`, from));
+					continue;
+				}
+			}
 			add(inline, { kind: 'not-applicable' });
 			continue;
 		}
 
-		const expressionSource = match[1].replace(/^\s*=\s*/, '').trim();
+		const expressionSource = trimmedContent.slice(marker.length).trim();
 		const parsedDeclaration = parseDeclaration(sourceText.slice(0, from), expressionSource, from);
 		if (parsedDeclaration.kind === 'error') {
 			inline.declarationDiagnostic = parsedDeclaration.diagnostic;
@@ -62,6 +80,14 @@ export function evaluateDocument(sourceText: string, options: DocumentEngineOpti
 			if (inline.declaration && !context.variables.has(inline.declaration.normalizedLabel) && referencesLabel(expressionSource, inline.declaration.normalizedLabel)) {
 				outcome = diagnostic('circular-reference', `Declaration "${inline.declaration.label}" cannot reference itself before it has a value.`, from);
 				add(inline, outcome);
+				unboundDeclarations.set(inline.declaration.normalizedLabel, inline.declaration.label);
+				continue;
+			}
+			const unbound = Array.from(unboundDeclarations.entries()).find(([name]) => referencesLabel(expressionSource, name));
+			if (unbound) {
+				outcome = diagnostic('unbound-variable', `Variable "${unbound[1]}" is declared but has no calculated value.`, from);
+				if (inline.declaration) unboundDeclarations.set(inline.declaration.normalizedLabel, inline.declaration.label);
+				add(inline, outcome);
 				continue;
 			}
 			const compatibility = options.evaluateCompatibility?.(expressionSource, context.variables);
@@ -77,7 +103,14 @@ export function evaluateDocument(sourceText: string, options: DocumentEngineOpti
 			}
 		}
 
-		if (outcome.kind === 'success' && inline.declaration) declare(inline.declaration, outcome.value, context);
+		if (inline.declaration) {
+			if (outcome.kind === 'success') {
+				declare(inline.declaration, outcome.value, context);
+				unboundDeclarations.delete(inline.declaration.normalizedLabel);
+			} else {
+				unboundDeclarations.set(inline.declaration.normalizedLabel, inline.declaration.label);
+			}
+		}
 		add(inline, outcome);
 	}
 
@@ -115,6 +148,9 @@ function evaluateAggregate(
 	options: DocumentEngineOptions,
 	offset: number,
 ): EvaluationOutcome {
+	if (!context.groups.has(node.group)) {
+		return diagnostic('unknown-group', `Unknown group "${node.group}".`, offset);
+	}
 	let members = context.groups.get(node.group) ?? [];
 	members = members.filter((member) => node.filters.every((filter) => {
 		const matches = filter.sigils.some((sigil) => member.groups.includes(sigil));

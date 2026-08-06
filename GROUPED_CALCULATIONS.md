@@ -6,7 +6,7 @@ Implemented. This document is retained as the design rationale; user-facing synt
 
 This document describes a proposed syntax and behavior for explicit calculations, grouped values, and aggregate functions in Obsidian Units. It is a design proposal, not documentation for an implemented feature.
 
-The proposal contains one intentional breaking syntax change: every Obsidian Units inline expression must begin with `=`. Named declarations retain `=` between the declaration prefix and inline expression.
+Every Obsidian Units inline expression must begin with the configured expression marker, which defaults to `=`. Named declarations retain `=` between the declaration prefix and inline expression. Exactly one marker is active at a time.
 
 The old implicit and new explicit forms differ as follows:
 
@@ -26,7 +26,7 @@ The explicit-expression syntax break has several related behavioral consequences
 
 ### Implicit conversions and numeric expressions
 
-The leading marker applies to conversions and numeric literals as well as arithmetic:
+The configured marker applies to conversions and numeric literals as well as arithmetic; the examples use the default `=` marker:
 
 ```markdown
 `33 meters to feet`   <!-- ordinary inline code -->
@@ -104,7 +104,7 @@ Groups contain evaluated numerical values. Currency symbols, LaTeX, and ledger n
 
 ## Explicit expressions
 
-Every expression owned by Obsidian Units begins with `=` inside an inline code span:
+Every expression owned by Obsidian Units begins with the configured marker inside an inline code span (shown here with the default `=`):
 
 ```markdown
 `=10 / 2`
@@ -355,7 +355,7 @@ Use `npm run build` to build the plugin.
 
 The implementation should parse the syntax in small stages rather than relying on one expression for an entire Markdown line:
 
-1. Identify inline code whose content begins with `=`.
+1. Identify inline code whose content begins with the configured marker.
 2. Inspect the text immediately preceding the code for a whitespace-surrounded assignment `=` and an optional declaration prefix.
 3. Split the trimmed prefix into its label and attached group sigils.
 4. Evaluate the explicit expression.

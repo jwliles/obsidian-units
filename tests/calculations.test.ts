@@ -72,8 +72,15 @@ assert.equal(successValue(filters, 3), 30);
 assert.equal(successValue(filters, 4), 10);
 
 // Empty identities/errors, forward scope, suggestions, and aggregate group rejection.
-assert.deepEqual(displays('`=sum:none`\n`=count:none`'), ['0', '0']);
-for (const fn of ['avg', 'min', 'max']) assert.equal(outcomes(`\`=${fn}:none\``)[0].kind, 'error');
+for (const fn of ['sum', 'count', 'avg', 'min', 'max']) {
+	const unknownGroup = outcomes(`\`=${fn}:none\``)[0];
+	assert.equal(unknownGroup.kind, 'error');
+	if (unknownGroup.kind === 'error') assert.equal(unknownGroup.diagnostic.code, 'unknown-group');
+}
+const emptyFiltered = outcomes('item:known = `=1`\n`=sum:known{missing}`\n`=count:known{missing}`');
+assert.equal(emptyFiltered[1].kind === 'success' ? emptyFiltered[1].display : '', '0');
+assert.equal(emptyFiltered[2].kind === 'success' ? emptyFiltered[2].display : '', '0');
+for (const fn of ['avg', 'min', 'max']) assert.equal(outcomes(`item:known = \`=1\`\n\`=${fn}:known{missing}\``)[1].kind, 'error');
 const typo = outcomes('CPI = `=330.30`\nratio = `=CIP / 299.97`')[1];
 assert.equal(typo.kind, 'error');
 if (typo.kind === 'error') {
@@ -96,5 +103,16 @@ if (circular.kind === 'error') assert.equal(circular.diagnostic.code, 'circular-
 const divideByZero = outcomes('`=1 / 0`')[0];
 assert.equal(divideByZero.kind, 'error');
 if (divideByZero.kind === 'error') assert.equal(divideByZero.diagnostic.code, 'non-finite-result');
+
+const customMarker = evaluateDocument('CAC = `=200`\nTotal = `~CAC + 1`\nGood = `~2`', {
+	...options,
+	marker: '~',
+	incorrectMarkers: ['='],
+}).entries().map((entry) => entry.outcome);
+assert.equal(customMarker[0].kind, 'error');
+if (customMarker[0].kind === 'error') assert.equal(customMarker[0].diagnostic.code, 'incorrect-marker');
+assert.equal(customMarker[1].kind, 'error');
+if (customMarker[1].kind === 'error') assert.equal(customMarker[1].diagnostic.code, 'unbound-variable');
+assert.equal(customMarker[2].kind, 'success');
 
 console.log('All grouped calculation tests passed.');
