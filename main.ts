@@ -1,6 +1,8 @@
 import { App, Editor, MarkdownPostProcessorContext, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, editorLivePreviewField } from 'obsidian';
 import { Prec, Range, StateEffect, StateField } from '@codemirror/state';
 import { Decoration, DecorationSet, EditorView, ViewPlugin, ViewUpdate, WidgetType } from '@codemirror/view';
+import { DocumentEvaluationIndex, EvaluatedValue } from './src/calculations/types';
+import { evaluateDocument } from './src/document/evaluation-index';
 
 type UnitDisplayForm = 'abbr' | 'name';
 
@@ -17,7 +19,7 @@ interface ObsidianUnitsSettings {
 	densities: DensityEntry[];
 }
 
-const DEFAULT_SETTINGS: ObsidianUnitsSettings = {
+export const DEFAULT_SETTINGS: ObsidianUnitsSettings = {
 	precision: 4,
 	renderInLivePreviewByDefault: true,
 	unitDisplayOverrides: {},
@@ -800,6 +802,7 @@ function searchUnits(query: string, limit = 10): UnitSearchEntry[] {
 export default class ObsidianUnitsPlugin extends Plugin {
 	settings: ObsidianUnitsSettings = DEFAULT_SETTINGS;
 	private livePreviewRenderingField!: StateField<LivePreviewRenderingState>;
+	private evaluationCache?: { source: string; settingsKey: string; index: DocumentEvaluationIndex };
 
 	async onload() {
 		await this.loadSettings();
@@ -850,6 +853,19 @@ export default class ObsidianUnitsPlugin extends Plugin {
 		return evaluateInlineExpressionFallback(text, this.settings, variables, isExplicit);
 	}
 
+	evaluateDocument(source: string): DocumentEvaluationIndex {
+		const settingsKey = JSON.stringify([this.settings.precision, this.settings.unitDisplayOverrides, this.settings.densities]);
+		if (this.evaluationCache?.source === source && this.evaluationCache.settingsKey === settingsKey) {
+			return this.evaluationCache.index;
+		}
+		const index = evaluateDocument(source, {
+			formatNumber: (value) => formatNumber(value, this.settings.precision),
+			evaluateCompatibility: (expression, values) => evaluateCompatibilityExpression(expression, values, this.settings),
+		});
+		this.evaluationCache = { source, settingsKey, index };
+		return index;
+	}
+
 	isLivePreviewRenderingEnabled(view: EditorView): boolean {
 		return view.state.field(this.livePreviewRenderingField, false)?.enabled ?? this.settings.renderInLivePreviewByDefault;
 	}
@@ -877,7 +893,7 @@ export default class ObsidianUnitsPlugin extends Plugin {
 		const conversion = parseConversion(range.text, this.settings);
 
 		if (!conversion) {
-			new Notice('Could not find a unit conversion like "5 ft to cm".');
+			new Notice(diagnoseConversion(range.text, this.settings) ?? 'Could not find a unit conversion like "5 ft to cm".');
 			return;
 		}
 
@@ -892,6 +908,7 @@ export default class ObsidianUnitsPlugin extends Plugin {
 		const matches = Array.from(range.text.matchAll(inlineCodePattern));
 		const rangeStartOffset = editor.posToOffset(range.from);
 		const fullDoc = editor.getValue();
+		const documentIndex = this.evaluateDocument(fullDoc);
 
 		if (matches.length > 0) {
 			let replacement = '';
@@ -903,18 +920,24 @@ export default class ObsidianUnitsPlugin extends Plugin {
 				const matchStart = match.index ?? 0;
 				const matchEnd = matchStart + match[0].length;
 				const prefixText = fullDoc.slice(0, rangeStartOffset + matchStart);
-				const variables = collectVariables(prefixText, this.settings);
-				const isExplicit = extractAssignmentName(prefixText) !== null;
-				const evaluation = this.evaluateInlineExpression(match[1], variables, isExplicit);
+				const outcome = documentIndex.outcomeAt(rangeStartOffset + matchStart);
+				const commandEvaluation = outcome?.kind === 'not-applicable'
+					? this.evaluateInlineExpression(match[1], collectVariables(prefixText, this.settings), true)
+					: null;
 
 				replacement += range.text.slice(cursor, matchStart);
-				if (evaluation) {
-					replacement += evaluation.text;
+				if (outcome?.kind === 'success') {
+					replacement += outcome.display;
+					evaluatedAny = true;
+				} else if (commandEvaluation) {
+					replacement += commandEvaluation.text;
 					evaluatedAny = true;
 				} else {
 					replacement += match[0];
 					if (firstFailure === null) {
-						firstFailure = match[1];
+						firstFailure = outcome?.kind === 'error'
+							? outcome.diagnostic.message
+							: describeEvaluationFailure(match[1], this.settings);
 					}
 				}
 				cursor = matchEnd;
@@ -922,7 +945,7 @@ export default class ObsidianUnitsPlugin extends Plugin {
 			replacement += range.text.slice(cursor);
 
 			if (!evaluatedAny) {
-				new Notice(describeEvaluationFailure(firstFailure, this.settings));
+				new Notice(firstFailure ?? 'No inline expression to evaluate on this line.');
 				return;
 			}
 
@@ -1035,7 +1058,7 @@ function getExpressionRange(editor: Editor) {
 
 const CONVERSION_PATTERN = /^(-?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)\s*(.+?)(?:\s+of\s+(.+?))?\s*(?:->|\bto\b|\bas\b|\bin\b)\s*(.+)$/i;
 
-function parseConversion(text: string, settings: ObsidianUnitsSettings): Conversion | null {
+export function parseConversion(text: string, settings: ObsidianUnitsSettings): Conversion | null {
 	const cleaned = stripArithmeticEquals(stripExistingResult(stripInlineCodeMarkers(text.trim())));
 	const match = cleaned.match(CONVERSION_PATTERN);
 	if (!match) {
@@ -1077,7 +1100,7 @@ function parseConversion(text: string, settings: ObsidianUnitsSettings): Convers
 	return { input, source, target, output };
 }
 
-function diagnoseConversion(text: string, settings: ObsidianUnitsSettings): string | null {
+export function diagnoseConversion(text: string, settings: ObsidianUnitsSettings): string | null {
 	const cleaned = stripArithmeticEquals(stripExistingResult(stripInlineCodeMarkers(text.trim())));
 	const match = cleaned.match(CONVERSION_PATTERN);
 	if (!match) {
@@ -1157,7 +1180,7 @@ function parseInlineRenderMode(text: string): { expression: string; mode: Inline
 	};
 }
 
-function evaluateInlineExpressionFallback(text: string, settings: ObsidianUnitsSettings, variables: VariableMap = new Map(), isExplicit = false): InlineEvaluation | null {
+export function evaluateInlineExpressionFallback(text: string, settings: ObsidianUnitsSettings, variables: VariableMap = new Map(), isExplicit = false): InlineEvaluation | null {
 	const inlineConversion = parseInlineConversion(text, settings);
 	if (inlineConversion) {
 		const renderedText = formatInlineConversion(inlineConversion, settings);
@@ -1185,6 +1208,23 @@ function evaluateInlineExpressionFallback(text: string, settings: ObsidianUnitsS
 		text: formatNumber(arithmeticResult, settings.precision),
 		consumeTrailingS: false,
 	};
+}
+
+export function evaluateCompatibilityExpression(expression: string, values: Map<string, EvaluatedValue>, settings: ObsidianUnitsSettings) {
+	const variables: VariableMap = new Map();
+	for (const [name, value] of values) if (value.kind === 'number') variables.set(name, value.value);
+	const evaluation = evaluateInlineExpressionFallback(expression, settings, variables, true);
+	if (!evaluation) {
+		const message = diagnoseConversion(expression, settings);
+		return message ? { kind: 'error' as const, code: 'conversion-error', message } : null;
+	}
+	const conversion = parseInlineConversion(expression, settings);
+	const numericValue = conversion?.conversion.output ?? extractLeadingNumber(evaluation.text);
+	if (numericValue === null) return null;
+	const value: EvaluatedValue = conversion
+		? { kind: 'quantity', value: conversion.conversion.output, unit: conversion.conversion.target.canonical, dimension: conversion.conversion.target.dimension }
+		: { kind: 'number', value: numericValue };
+	return { kind: 'success' as const, value, display: evaluation.text, consumeTrailingS: evaluation.consumeTrailingS };
 }
 
 function stripInlineCodeMarkers(text: string): string {
@@ -1700,6 +1740,7 @@ function buildInlineCodeDecorations(view: EditorView, plugin: ObsidianUnitsPlugi
 	const decorations: Range<Decoration>[] = [];
 	const generation = plugin.livePreviewRenderingGeneration(view);
 	const selectionRanges = view.state.selection.ranges;
+	const evaluationIndex = plugin.evaluateDocument(view.state.doc.toString());
 
 	for (const range of view.visibleRanges) {
 		const startLine = view.state.doc.lineAt(range.from);
@@ -1712,9 +1753,7 @@ function buildInlineCodeDecorations(view: EditorView, plugin: ObsidianUnitsPlugi
 
 			while ((match = inlineCodePattern.exec(line.text)) !== null) {
 				const from = line.from + match.index;
-				const variables = collectVariables(view.state.doc.sliceString(0, from), plugin.settings);
-				const isExplicit = extractAssignmentName(line.text.slice(0, match.index)) !== null;
-				const inlineEvaluation = plugin.evaluateInlineExpression(match[1], variables, isExplicit);
+				const outcome = evaluationIndex.outcomeAt(from);
 
 				const localTo = match.index + match[0].length;
 				const baseFrom = from;
@@ -1724,8 +1763,8 @@ function buildInlineCodeDecorations(view: EditorView, plugin: ObsidianUnitsPlugi
 					continue;
 				}
 
-				if (inlineEvaluation) {
-					const shouldConsumeTrailingS = inlineEvaluation.consumeTrailingS && line.text.charAt(localTo) === 's';
+				if (outcome?.kind === 'success') {
+					const shouldConsumeTrailingS = outcome.consumeTrailingS === true && line.text.charAt(localTo) === 's';
 					const pos = basePos + (shouldConsumeTrailingS ? 1 : 0);
 
 					if (selectionRanges.some((s) => s.from <= pos && s.to >= baseFrom)) {
@@ -1733,15 +1772,14 @@ function buildInlineCodeDecorations(view: EditorView, plugin: ObsidianUnitsPlugi
 					}
 
 					decorations.push(Decoration.replace({
-						widget: new ObsidianUnitsResultWidget(inlineEvaluation.text, generation),
+						widget: new ObsidianUnitsResultWidget(outcome.display, generation),
 					}).range(baseFrom, pos));
 					continue;
 				}
 
-				const diagnosis = diagnoseConversion(match[1], plugin.settings);
-				if (diagnosis) {
+				if (outcome?.kind === 'error') {
 					decorations.push(Decoration.replace({
-						widget: new ObsidianUnitsErrorWidget(diagnosis, generation),
+						widget: new ObsidianUnitsErrorWidget(outcome.diagnostic.message, generation),
 					}).range(baseFrom, basePos));
 				}
 			}
@@ -1762,35 +1800,29 @@ async function renderInlineCodeConversions(element: HTMLElement, ctx: MarkdownPo
 	const sectionStartOffset = sourceText && sectionInfo
 		? getLineStartOffset(sourceText, sectionInfo.lineStart)
 		: null;
+	const evaluationIndex = sourceText ? plugin.evaluateDocument(sourceText) : null;
 
 	for (let index = 0; index < codeElements.length; index++) {
 		const codeElement = codeElements[index];
 		const sourceMatch = sectionInlineMatches[index];
-		const prefixText = sourceText && sectionStartOffset !== null && sourceMatch && sourceMatch.index !== undefined
-			? sourceText.slice(0, sectionStartOffset + sourceMatch.index)
-			: collectTextBeforeNode(element, codeElement);
-		const variables = collectVariables(prefixText, plugin.settings);
-		const isExplicit = extractAssignmentName(prefixText) !== null;
-
 		const codeText = codeElement.textContent ?? '';
-		const inlineEvaluation = plugin.evaluateInlineExpression(
-			codeText,
-			variables,
-			isExplicit,
-		);
-		if (!inlineEvaluation) {
-			const diagnosis = diagnoseConversion(codeText, plugin.settings);
-			if (diagnosis) {
-				codeElement.replaceWith(createResultSpan(diagnosis, 'obsidian-units-error'));
-			}
+		const sourceOffset = sectionStartOffset !== null && sourceMatch?.index !== undefined
+			? sectionStartOffset + sourceMatch.index
+			: null;
+		const outcome = sourceOffset !== null ? evaluationIndex?.outcomeAt(sourceOffset) : undefined;
+		if (!outcome || outcome.kind === 'not-applicable') {
+			continue;
+		}
+		if (outcome.kind === 'error') {
+			codeElement.replaceWith(createResultSpan(outcome.diagnostic.message, 'obsidian-units-error'));
 			continue;
 		}
 
-		if (inlineEvaluation.consumeTrailingS) {
+		if (outcome.consumeTrailingS) {
 			consumeNextTextPrefix(codeElement, 's');
 		}
 
-		const result = createResultSpan(inlineEvaluation.text, 'obsidian-units-result');
+		const result = createResultSpan(outcome.display, 'obsidian-units-result');
 		codeElement.replaceWith(result);
 	}
 }

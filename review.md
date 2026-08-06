@@ -262,34 +262,6 @@ Traverse explicit expressions in document order:
 
 This preserves the proposal's preceding-content scope and avoids repeated rescanning of the note.
 
-## Migration strategy
-
-The two syntax breaks are coherent and should be released together:
-
-```markdown
-<!-- Current -->
-CPI = `330.30`
-ratio = `CPI / 299.97`
-
-<!-- Proposed -->
-CPI: `=330.30`
-ratio: `=CPI / 299.97`
-```
-
-A blind migration that prefixes every inline code span would be unsafe because many notes contain ordinary code.
-
-### Recommended migration command
-
-Use the current parser and evaluator to classify existing content:
-
-1. Prefix a code span with `=` only when the current implementation successfully recognizes it as arithmetic or a unit conversion.
-2. Convert only declaration lines recognized by the current declaration parser.
-3. Leave all other inline code unchanged.
-4. Produce a report of ambiguous or unclassified spans.
-5. Make the migration a deliberate command rather than an automatic edit on plugin update.
-
-A temporary legacy mode could exist for one release if needed, but maintaining both syntaxes indefinitely would complicate parsing and documentation.
-
 ## Compatibility details to document explicitly
 
 The proposal already confirms that inline render modes survive:
@@ -394,7 +366,6 @@ A practical first grouped-calculation release could include:
 - Visible errors outside the active editing state.
 - Dimensionless grouped values only.
 - A top-down context cache.
-- A migration command for recognized existing expressions.
 
 The following can wait:
 
@@ -418,8 +389,7 @@ The following can wait:
 7. Use `0` for empty `sum` and `count`; error for empty `avg`, `min`, and `max`.
 8. Reject literal colons in labels initially.
 9. Build the top-down context cache as part of this feature.
-10. Provide a deliberate migration command based on the current parser.
-11. Preserve current render modes, plural handling, density conversions, and command-palette behavior unless implementation reveals a conflict.
+10. Preserve current render modes, plural handling, density conversions, and command-palette behavior unless implementation reveals a conflict.
 
 ## Final judgment
 

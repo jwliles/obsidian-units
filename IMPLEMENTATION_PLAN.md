@@ -452,19 +452,7 @@ Tests are added throughout every phase; this phase closes coverage gaps and veri
 - Manual smoke tests pass in both Live Preview and Reading View.
 - The README accurately reflects implemented behavior rather than proposal syntax.
 
-## Phase 6: Migration and documentation
-
-### Migration command
-
-Add a deliberate command that uses the old parser to classify existing notes:
-
-1. Prefix recognized arithmetic and conversions with `=`.
-2. Retain recognized `NAME = \`EXPRESSION\`` declarations and prefix their expression contents with `=`.
-3. Leave unrecognized inline code untouched.
-4. Preview or report changed, ambiguous, and skipped expressions before destructive vault-wide use.
-5. Operate on the active note first; consider vault-wide migration only as a separate, explicitly confirmed action.
-
-Because there is currently one user, a legacy mode is unnecessary unless migration testing reveals a practical need.
+## Phase 6: Documentation
 
 ### Documentation
 
@@ -472,12 +460,11 @@ Because there is currently one user, a legacy mode is unnecessary unless migrati
 2. Document declarations, chained sigils, aggregates, filters, scope, and errors.
 3. Show both terse and descriptive sigils.
 4. Explain that grouped values are dimensionless in the first release.
-5. Document preserved command behavior and the migration command.
+5. Document preserved command behavior.
 6. Retain `GROUPED_CALCULATIONS.md` as the design rationale or mark it implemented once behavior matches it.
 
 ### Exit criteria
 
-- Existing personal notes can be migrated deliberately and reviewed before saving.
 - User documentation contains no examples of unsupported implicit inline evaluation.
 
 ## Manual acceptance example
@@ -526,7 +513,6 @@ Use `npm run build`.
 - Core parsing and evaluation are independent of Obsidian rendering.
 - Live Preview and Reading View share results and diagnostics.
 - Group aggregation is dimension-safe and top-to-bottom.
-- Breaking changes have a deliberate migration path.
 - Automated grammar, evaluation, error, and compatibility tests pass.
 - Production build and manual Obsidian smoke tests pass.
 - README and design documentation match the shipped behavior.

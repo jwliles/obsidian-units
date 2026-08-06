@@ -1,0 +1,48 @@
+export type EvaluatedValue =
+	| { kind: 'number'; value: number }
+	| { kind: 'quantity'; value: number; unit: string; dimension: string };
+
+export interface EvaluationDiagnostic {
+	code: string;
+	message: string;
+	offset: number;
+}
+
+export type EvaluationOutcome =
+	| { kind: 'success'; value: EvaluatedValue; display: string; consumeTrailingS?: boolean }
+	| { kind: 'error'; diagnostic: EvaluationDiagnostic }
+	| { kind: 'not-applicable' };
+
+export interface Declaration {
+	label: string;
+	normalizedLabel: string;
+	groups: string[];
+	expressionSource: string;
+	sourceOffset: number;
+}
+
+export interface GroupMember {
+	label: string;
+	value: EvaluatedValue;
+	groups: string[];
+	sourceOffset: number;
+}
+
+export interface EvaluationContext {
+	variables: Map<string, EvaluatedValue>;
+	groups: Map<string, GroupMember[]>;
+}
+
+export interface InlineSource {
+	from: number;
+	to: number;
+	content: string;
+	declaration?: Declaration;
+	declarationDiagnostic?: EvaluationDiagnostic;
+}
+
+export interface DocumentEvaluationIndex {
+	outcomeAt(sourceOffset: number): EvaluationOutcome | undefined;
+	declarationAt(sourceOffset: number): Declaration | undefined;
+	entries(): ReadonlyArray<{ source: InlineSource; outcome: EvaluationOutcome }>;
+}

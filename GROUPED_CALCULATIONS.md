@@ -2,11 +2,13 @@
 
 ## Status
 
+Implemented. This document is retained as the design rationale; user-facing syntax is documented in `README.md`.
+
 This document describes a proposed syntax and behavior for explicit calculations, grouped values, and aggregate functions in Obsidian Units. It is a design proposal, not documentation for an implemented feature.
 
 The proposal contains one intentional breaking syntax change: every Obsidian Units inline expression must begin with `=`. Named declarations retain `=` between the declaration prefix and inline expression.
 
-Existing notes must therefore be migrated. For example:
+The old implicit and new explicit forms differ as follows:
 
 ```markdown
 <!-- Current syntax -->
@@ -34,7 +36,6 @@ The leading marker applies to conversions and numeric literals as well as arithm
 `=330.30`             <!-- Obsidian Units value -->
 ```
 
-Existing conversion expressions must therefore be migrated even when they are not named declarations.
 
 ### Visible failures
 

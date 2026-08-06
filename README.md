@@ -4,10 +4,10 @@ Soulver-style inline unit conversions for Obsidian notes.
 
 ## Usage
 
-Wrap a conversion expression in inline code to show the result automatically:
+Prefix a conversion or calculation with `=` inside inline code to show the result automatically:
 
 ```text
-I need `33 meters to feet` of lumber.
+I need `=33 meters to feet` of lumber.
 ```
 
 In Reading View and Live Preview, Obsidian Units renders the calculated result after the inline code without changing the note text.
@@ -15,19 +15,21 @@ In Reading View and Live Preview, Obsidian Units renders the calculated result a
 If the surrounding sentence already supplies the unit, add `| value`:
 
 ```text
-I need `3 kg to pound | value` pounds of soil.
+I need `=3 kg to pound | value` pounds of soil.
 ```
 
 Inline render modes:
 
-- `33 meters to feet` renders the value and unit.
-- `33 meters to feet | value` renders only the value.
-- `33 meters to feet | unit` renders only the target unit name.
+- `=33 meters to feet` renders the value and unit.
+- `=33 meters to feet | value` renders only the value.
+- `=33 meters to feet | unit` renders only the target unit name.
+
+Ordinary inline code such as `npm run build` is never treated as a calculation.
 
 For editors that auto-pair backticks, a trailing plural `s` after the inline code is tolerated:
 
 ```text
-`33 ounces to gram`s
+`=33 ounces to gram`s
 ```
 
 renders as `935.5349 grams`, not `935.5349 gramss`.
@@ -38,30 +40,43 @@ You can also type the target unit in singular form; the rendered result uses the
 Inline arithmetic is also supported:
 
 ```text
-`10/2`
-`10 / 2`
-`10 / 2 =`
-`(10 + 2) / 3`
-`2^8`
+`=10/2`
+`=10 / 2`
+`=10 / 2 =`
+`=(10 + 2) / 3`
+`=2^8`
 ```
 
 Inline arithmetic can reference numeric labels from earlier lines. The context is parsed top-to-bottom; later assignments override earlier ones from that point onward.
 
 ```text
-oldPay = `940`
-oldCPI = `290`
-newCPI = `330`
-newPay = `oldPay (newCPI / oldCPI)`
+oldPay = `=940`
+oldCPI = `=290`
+newCPI = `=330`
+newPay = `=oldPay (newCPI / oldCPI)`
 
-oldPay = `1000`
-newerPay = `oldPay (newCPI / oldCPI)`
+oldPay = `=1000`
+newerPay = `=oldPay (newCPI / oldCPI)`
 ```
 
-The labels above are available by name inside later inline arithmetic expressions. Earlier results are not recalculated from later assignments.
+The labels above are available by name inside later expressions. Earlier results are not recalculated from later assignments.
 
-## Performance Note
+Declarations can attach one or more group sigils to a dimensionless value. Aggregates see successful declarations above them only:
 
-Variable references are currently resolved by scanning earlier note content for each inline expression. This is simple and works well for typical notes, but large calculation-heavy documents should eventually use a per-render-pass top-down context cache.
+```text
+- Service:ex:ls = `=50`
+- Store:ex:gr = `=60`
+- Utility:ex:ob = `=180`
+- Total: `=sum:ex`
+- Obligations or landscaping: `=sum:ex{ob,ls}`
+- Non-grocery: `=sum:ex{!gr}`
+```
+
+Available aggregates are `sum`, `count`, `avg`, `min`, and `max`. Comma-separated filters are OR; repeated filter clauses are AND. A fully negated clause complements its union, so `{!ob,!ls}` means “neither ob nor ls.” `sum` and `count` return zero for an empty selection; the other functions show an error. Unit-bearing conversions cannot be aggregated in this release.
+
+### Errors
+
+Explicit expressions render a diagnostic instead of remaining as unchanged code when they cannot be evaluated. Diagnostics identify invalid declarations and sigils, malformed aggregates, unknown variables and units, incompatible conversions, missing density materials, division by zero, self-references, empty aggregates, and unsupported quantity aggregation. Unknown variables include a suggested preceding label when there is a close match. In Live Preview, the source remains editable while the cursor is inside the code span.
 
 You can also write a conversion expression, place the cursor on that line, and run **Obsidian Units: Convert units in selection or current line** from the command palette.
 
@@ -111,8 +126,8 @@ The `conversions.tsv` file is a planning/reference list for future category expa
 Mass and volume are different dimensions, so a conversion like `1 tsp to g` is incomplete — the answer depends on what's in the teaspoon. Once you teach the plugin a material's density, expressions like the following work in either direction:
 
 ```text
-`1 tsp of maple syrup to g`     → 6.7503 grams
-`100 g of maple syrup to ml`    → 72.993 milliliters
+`=1 tsp of maple syrup to g`     → 6.7503 grams
+`=100 g of maple syrup to ml`    → 72.993 milliliters
 ```
 
 The keyword `of <material>` appears between the source unit and `to`/`as`/`in`/`->`. The material name can contain spaces and is matched case-insensitively. Mismatched dimensions other than mass ↔ volume are still rejected (the plugin does not bridge volume → length, etc.).
