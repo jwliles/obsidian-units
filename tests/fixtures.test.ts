@@ -4,12 +4,17 @@ import { DEFAULT_SETTINGS, evaluateCompatibilityExpression } from '../main';
 import { evaluateDocument } from '../src/document/evaluation-index';
 
 const fixtureFiles = [
-	'tests/01-namespaces-and-duplicate-labels.md',
+	'tests/01-membership-and-declaration-identity.md',
 	'tests/02-filter-matrix.md',
 	'tests/03-scope-and-errors.md',
+	'tests/04-local-scopes.md',
+	'tests/05-local-accumulations.md',
+	'tests/06-august-ledger.md',
 ];
 
+const failures: string[] = [];
 let assertions = 0;
+
 for (const file of fixtureFiles) {
 	const source = readFileSync(file, 'utf8');
 	const index = evaluateDocument(source, {
@@ -17,30 +22,55 @@ for (const file of fixtureFiles) {
 		formatNumber: formatFixtureNumber,
 		evaluateCompatibility: (expression, values) => evaluateCompatibilityExpression(expression, values, DEFAULT_SETTINGS),
 	});
+	let fileAssertions = 0;
 	for (const entry of index.entries()) {
 		const followingLines = source.slice(entry.source.to).split('\n');
 		const commentSource = followingLines[0].includes('<!--')
 			? followingLines[0]
 			: followingLines[1]?.trimStart().startsWith('<!--') ? followingLines[1] : '';
-		const comment = commentSource.match(/<!--\s*(ERROR\s*:)?\s*([^>]*?)\s*-->/i);
-		if (!comment) continue;
-		if (comment[1]) {
-			assert.equal(entry.outcome.kind, 'error', `${file}: expected an error for ${entry.source.content}`);
-			assertions++;
-			continue;
-		}
-		const expectedValue = comment[2].match(/^(-?(?:\d+(?:\.\d*)?|\.\d+))/)?.[1];
-		if (expectedValue === undefined) continue;
-		assert.equal(entry.outcome.kind, 'success', `${file}: expected success for ${entry.source.content}`);
-		if (entry.outcome.kind === 'success') {
-			assert.equal(entry.outcome.display, expectedValue, `${file}: unexpected display for ${entry.source.content}`);
-		}
+		const expected = commentSource.match(/<!--\s*expect:(value|error)\s+([^\s>]+)/i);
+		if (!expected) continue;
+
 		assertions++;
+		fileAssertions++;
+		const description = `${file}:${lineAt(source, entry.source.from)} ${entry.source.content}`;
+		if (expected[1].toLowerCase() === 'value') {
+			if (entry.outcome.kind !== 'success') {
+				failures.push(`${description}: expected value ${expected[2]}, got ${describeOutcome(entry.outcome)}`);
+			} else if (entry.outcome.display !== expected[2]) {
+				failures.push(`${description}: expected value ${expected[2]}, got ${entry.outcome.display}`);
+			}
+		} else if (entry.outcome.kind !== 'error') {
+			failures.push(`${description}: expected error ${expected[2]}, got ${describeOutcome(entry.outcome)}`);
+		} else if (entry.outcome.diagnostic.code !== expected[2]) {
+			failures.push(`${description}: expected error ${expected[2]}, got ${entry.outcome.diagnostic.code}`);
+		}
 	}
+	assert.ok(fileAssertions > 0, `${file} contains no executable expectations`);
 }
 
-assert.ok(assertions >= 30, `Expected at least 30 fixture assertions, found ${assertions}`);
-console.log(`All Markdown fixtures passed (${assertions} assertions).`);
+assert.ok(assertions >= 70, `Expected at least 70 fixture assertions, found ${assertions}`);
+if (failures.length) {
+	throw new assert.AssertionError({
+		message: `${failures.length} of ${assertions} fixture assertions failed:\n${failures.join('\n')}`,
+		actual: failures.length,
+		expected: 0,
+		operator: 'fixture specification',
+	});
+}
+
+console.log(`All Markdown fixtures passed (${assertions} assertions across ${fixtureFiles.length} files).`);
+
+function lineAt(source: string, offset: number): number {
+	return source.slice(0, offset).split('\n').length;
+}
+
+function describeOutcome(outcome: ReturnType<ReturnType<typeof evaluateDocument>['outcomeAt']>): string {
+	if (!outcome) return 'no outcome';
+	if (outcome.kind === 'success') return `value ${outcome.display}`;
+	if (outcome.kind === 'error') return `error ${outcome.diagnostic.code}`;
+	return 'not-applicable';
+}
 
 function formatFixtureNumber(value: number, minimumDecimalPlaces = 0): string {
 	let display = value.toFixed(4).replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');

@@ -1,4 +1,4 @@
-import { normalizeSigil } from './normalize';
+import { normalizeLabel, normalizeSigil } from './normalize';
 
 export type AggregateFunction = 'sum' | 'count' | 'avg' | 'min' | 'max';
 export interface AggregateFilter { negated: boolean; sigils: string[] }
@@ -7,7 +7,7 @@ export type AggregateParseOutcome = { kind: 'success'; node: AggregateExpression
 
 export function parseAggregate(source: string): AggregateParseOutcome {
 	const trimmed = source.trim();
-	const head = trimmed.match(/^([\p{L}]+)(::?)([^{}\s]+)(.*)$/u);
+	const head = trimmed.match(/^([\p{L}]+)(::?)(.*)$/u);
 	if (!head) {
 		if (/^(?:sum|count|avg|min|max)\s*:/i.test(trimmed) || /^(?:sum|count|avg|min|max)\b/i.test(trimmed)) {
 			return { kind: 'error', message: 'Malformed aggregate expression.' };
@@ -19,11 +19,13 @@ export function parseAggregate(source: string): AggregateParseOutcome {
 		return { kind: 'error', message: `Unknown aggregate function "${head[1]}".` };
 	}
 	const scope = head[2] === '::' ? 'local' : 'global';
-	const group = normalizeSigil(head[3]);
-	if (!validSigil(group)) return { kind: 'error', message: 'Invalid aggregate group sigil.' };
+	const filterStart = head[3].indexOf('{');
+	const groupSource = (filterStart < 0 ? head[3] : head[3].slice(0, filterStart)).trim();
+	const group = normalizeMembership(groupSource);
+	if (!validMembership(group)) return { kind: 'error', message: 'Invalid aggregate group.' };
 
 	const filters: AggregateFilter[] = [];
-	let rest = head[4];
+	let rest = filterStart < 0 ? '' : head[3].slice(filterStart);
 	while (rest.length > 0) {
 		const clause = rest.match(/^\{([^{}]*)\}/);
 		if (!clause) return { kind: 'error', message: 'Malformed aggregate filter braces.' };
@@ -33,14 +35,18 @@ export function parseAggregate(source: string): AggregateParseOutcome {
 		if (negative.some(Boolean) && !negative.every(Boolean)) {
 			return { kind: 'error', message: 'Positive and negative sigils cannot be mixed in one filter clause. Use {!gr,!ls} to exclude both, or separate clauses like {ls}{!gr} to combine polarities.' };
 		}
-		const sigils = terms.map((term) => normalizeSigil(term.replace(/^!/, '')));
-		if (sigils.some((sigil) => !validSigil(sigil))) return { kind: 'error', message: 'Invalid aggregate filter sigil.' };
+		const sigils = terms.map((term) => normalizeMembership(term.replace(/^!/, '').trim()));
+		if (sigils.some((sigil) => !validMembership(sigil))) return { kind: 'error', message: 'Invalid aggregate filter membership.' };
 		filters.push({ negated: negative[0], sigils: Array.from(new Set(sigils)) });
 		rest = rest.slice(clause[0].length);
 	}
-	return { kind: 'success', node: { fn: fn as AggregateFunction, scope, group, groupSource: head[3], filters } };
+	return { kind: 'success', node: { fn: fn as AggregateFunction, scope, group, groupSource, filters } };
 }
 
-function validSigil(value: string): boolean {
-	return value.length > 0 && !/\s|[=:{},!|`]/u.test(value) && Array.from(value).length <= 64;
+function normalizeMembership(value: string): string {
+	return /\s/u.test(value) ? normalizeLabel(value) : normalizeSigil(value);
+}
+
+function validMembership(value: string): boolean {
+	return value.length > 0 && !/[=:{},!|`]/u.test(value);
 }

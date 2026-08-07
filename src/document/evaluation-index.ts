@@ -30,7 +30,7 @@ export function evaluateDocument(sourceText: string, options: DocumentEngineOpti
 		variables: new Map(),
 		variableLabels: new Map(),
 		groups: new Map(),
-		local: { active: new Map(), completed: new Map(), nextOrdinal: new Map(), qualifiersByLabel: new Map() },
+		local: { active: new Map(), completed: new Map(), nextOrdinal: new Map() },
 	};
 	const records: Array<{ source: InlineSource; outcome: EvaluationOutcome }> = [];
 	const byOffset = new Map<number, EvaluationOutcome>();
@@ -78,8 +78,10 @@ export function evaluateDocument(sourceText: string, options: DocumentEngineOpti
 			outcome = diagnostic(parsedExpression.code, parsedExpression.message, from);
 		} else if (parsedExpression.node.kind === 'aggregate') {
 			outcome = evaluateAggregate(parsedExpression.node, context, options, from);
-			if (inline.declaration && inline.declaration.groups.length > 0 && outcome.kind === 'success') {
-				outcome = diagnostic('aggregate-group-membership', 'Aggregate results cannot be attached to groups.', from);
+			if (inline.declaration
+				&& [inline.declaration.normalizedLabel, ...inline.declaration.groups].includes(parsedExpression.node.group)
+				&& outcome.kind === 'success') {
+				outcome = diagnostic('aggregate-group-membership', 'An aggregate result cannot join the group it is currently aggregating.', from);
 			}
 		} else {
 			if (inline.declaration && !context.variables.has(inline.declaration.normalizedLabel) && referencesLabel(expressionSource, inline.declaration.normalizedLabel)) {
@@ -112,10 +114,22 @@ export function evaluateDocument(sourceText: string, options: DocumentEngineOpti
 			}
 		}
 
+		if (parsedExpression.kind === 'success'
+			&& parsedExpression.node.kind === 'aggregate'
+			&& parsedExpression.node.scope === 'local'
+			&& outcome.kind === 'success') {
+			completeLocalAccumulation(
+				parsedExpression.node.group,
+				context,
+				from,
+				inline.declaration ? `declaration@${inline.declaration.sourceOffset}` : undefined,
+			);
+		}
+
 		if (inline.declaration) {
 			if (outcome.kind === 'success') {
 				const member = declare(inline.declaration, outcome.value, context);
-				updateLocalAccumulations(inline.declaration, member, context);
+				updateLocalAccumulations(member, context);
 				unboundDeclarations.delete(inline.declaration.normalizedLabel);
 			} else {
 				unboundDeclarations.set(inline.declaration.normalizedLabel, inline.declaration.label);
@@ -153,16 +167,17 @@ function declare(declaration: NonNullable<InlineSource['declaration']>, value: E
 	const declaredValue: EvaluatedValue = { ...value, provenance };
 	context.variables.set(declaration.normalizedLabel, declaredValue);
 	context.variableLabels.set(declaration.normalizedLabel, declaration.label);
+	const memberships = Array.from(new Set([declaration.normalizedLabel, ...declaration.groups]));
 	const member: GroupMember = {
 		declarationId,
 		label: declaration.label,
 		normalizedLabel: declaration.normalizedLabel,
 		value: declaredValue,
-		groups: declaration.groups,
+		groups: memberships,
 		localAccumulationIds: [],
 		sourceOffset: declaration.sourceOffset,
 	};
-	for (const group of declaration.groups) {
+	for (const group of memberships) {
 		const members = context.groups.get(group) ?? [];
 		members.push(member);
 		context.groups.set(group, members);
@@ -170,13 +185,8 @@ function declare(declaration: NonNullable<InlineSource['declaration']>, value: E
 	return member;
 }
 
-function updateLocalAccumulations(declaration: NonNullable<InlineSource['declaration']>, member: GroupMember, context: EvaluationContext) {
-	const previous = context.local.qualifiersByLabel.get(declaration.normalizedLabel) ?? [];
-	const current = declaration.localGroups;
-	for (const group of previous) {
-		if (!current.includes(group)) completeLocalAccumulation(group, context, declaration.sourceOffset, member.declarationId);
-	}
-	for (const group of current) {
+function updateLocalAccumulations(member: GroupMember, context: EvaluationContext) {
+	for (const group of member.groups) {
 		let accumulation = context.local.active.get(group);
 		if (!accumulation) {
 			const ordinal = context.local.nextOrdinal.get(group) ?? 1;
@@ -187,7 +197,7 @@ function updateLocalAccumulations(declaration: NonNullable<InlineSource['declara
 				ordinal,
 				status: 'active',
 				members: [],
-				openedAt: declaration.sourceOffset,
+				openedAt: member.sourceOffset,
 			};
 			context.local.active.set(group, accumulation);
 		}
@@ -196,7 +206,6 @@ function updateLocalAccumulations(declaration: NonNullable<InlineSource['declara
 		const provenance = member.value.provenance;
 		if (provenance && !provenance.localAccumulationIds.includes(accumulation.id)) provenance.localAccumulationIds.push(accumulation.id);
 	}
-	context.local.qualifiersByLabel.set(declaration.normalizedLabel, [...current]);
 }
 
 function completeLocalAccumulation(group: string, context: EvaluationContext, offset: number, declarationId?: string) {
@@ -229,17 +238,13 @@ function evaluateAggregate(
 		return aggregateMembers(node, accumulation.members, options, offset);
 	}
 	if (!context.groups.has(node.group)) {
-		const variableLabel = context.variableLabels.get(node.group);
-		const hint = variableLabel
-			? ` "${variableLabel}" is a variable; aggregates operate on group sigils. Tag entries with a sigil or reference "${options.marker ?? '='}${variableLabel}".`
-			: '';
-		return diagnostic('unknown-group', `Unknown group "${node.groupSource}".${hint}`, offset);
+		return diagnostic('unknown-group', `Unknown group "${node.groupSource}".`, offset);
 	}
 	return aggregateMembers(node, context.groups.get(node.group) ?? [], options, offset);
 }
 
 function aggregateMembers(node: AggregateExpressionNode, initialMembers: GroupMember[], options: DocumentEngineOptions, offset: number): EvaluationOutcome {
-	let members = initialMembers;
+	let members = Array.from(new Map(initialMembers.map((member) => [member.declarationId, member])).values());
 	members = members.filter((member) => node.filters.every((filter) => {
 		const matches = filter.sigils.some((sigil) => member.groups.includes(sigil));
 		return filter.negated ? !matches : matches;
@@ -265,7 +270,8 @@ function aggregateMembers(node: AggregateExpressionNode, initialMembers: GroupMe
 	const provenance = {
 		declarationIds: Array.from(new Set(members.flatMap((member) => member.value.provenance?.declarationIds ?? [member.declarationId]))),
 		sourceOffsets: Array.from(new Set(members.flatMap((member) => member.value.provenance?.sourceOffsets ?? [member.sourceOffset]))),
-		localAccumulationIds: Array.from(new Set(members.flatMap((member) => member.localAccumulationIds))),
+		localAccumulationIds: Array.from(new Set(members.flatMap((member) => member.localAccumulationIds)))
+			.filter((id) => node.scope !== 'local' || id.startsWith(`local:${node.group}:`)),
 	};
 	return { kind: 'success', value: { kind: 'number', value, decimalPlaces, provenance }, display: options.formatNumber(value, decimalPlaces) };
 }

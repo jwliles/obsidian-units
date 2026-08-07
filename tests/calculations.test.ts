@@ -59,6 +59,9 @@ if (mixedFilter.kind === 'error') assert.match(mixedFilter.message, /separate cl
 assert.equal(parseAggregate('sum:ex{}').kind, 'error');
 assert.equal(parseAggregate('unknown:ex').kind, 'error');
 assert.equal(parseAggregate('sum:ex{ob').kind, 'error');
+const labelHistoryAggregate = parseAggregate('sum:Running total');
+assert.equal(labelHistoryAggregate.kind, 'success');
+if (labelHistoryAggregate.kind === 'success') assert.equal(labelHistoryAggregate.node.group, 'running total');
 
 // Reassignment updates lookup but retains every group member.
 const repeated = [
@@ -109,12 +112,9 @@ if (typo.kind === 'error') {
 	assert.equal(typo.diagnostic.code, 'unknown-variable');
 	assert.match(typo.diagnostic.message, /Did you mean "CPI"/);
 }
-const namespaceHint = outcomes('Walmart = `=10`\n`=sum:Walmart`')[1];
-assert.equal(namespaceHint.kind, 'error');
-if (namespaceHint.kind === 'error') {
-	assert.match(namespaceHint.diagnostic.message, /Unknown group "Walmart"/);
-	assert.match(namespaceHint.diagnostic.message, /Walmart.*variable/);
-}
+const implicitHistory = outcomes('Walmart = `=10`\n`=sum:Walmart`')[1];
+assert.equal(implicitHistory.kind, 'success');
+if (implicitHistory.kind === 'success') assert.equal(implicitHistory.value.value, 10);
 const noSuggestion = outcomes('tiny = `=zq * 2`')[0];
 assert.equal(noSuggestion.kind, 'error');
 if (noSuggestion.kind === 'error') assert.doesNotMatch(noSuggestion.diagnostic.message, /Did you mean/);

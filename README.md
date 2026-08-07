@@ -36,7 +36,7 @@ For development, clone the repository directly into that plugin directory, run `
 - Evaluates declarations from top to bottom with clear unknown-variable and forward-reference errors.
 - Aggregates successful declarations with `sum`, `count`, `avg`, `min`, and `max`.
 - Filters groups with OR, AND, and exclusion clauses.
-- Supports local accumulation without relying on headings, lists, or other Markdown layout.
+- Closes local accumulations explicitly when a double-colon aggregate reads them.
 - Reports malformed expressions and unknown sigils instead of silently returning zero.
 - Renders in both Live Preview and Reading View while revealing source at the cursor.
 - Provides commands for plain-text conversion, result insertion, rendering control, and marker migration.
@@ -53,7 +53,7 @@ For development, clone the repository directly into that plugin directory, run `
 
 The conversion separators `to`, `as`, `in`, and `->` are supported. Add `| value`, `| unit`, or `| result` to control the displayed portion.
 
-### Variables and global groups
+### Variables and groups
 
 ```markdown
 Budget = `=1000`
@@ -64,20 +64,27 @@ Remaining = `=Budget - sum:ex`
 Utilities = `=sum:ex{utilities}`
 ```
 
-A repeated label updates the variable to its latest successful value. Groups retain every successful entry.
+A repeated label updates the variable to its latest successful value. Every
+declaration also joins its implicit label history, while sigils add explicit
+cross-cutting memberships. The declaration `CAC:ex` is therefore available to
+both `sum:cac` and `sum:ex` without copying or double-counting the record.
 
 ### Local accumulation
 
 ```markdown
-CAC:cac:ex = `=135`
-CAC:cac:ex = `=75`
-This CAC block = `=sum::cac`
+Rent:ex = `=800`
+Power:ex = `=150`
+First period = `=sum::ex`
 
-CAC = `=150`
-Completed CAC block = `=sum::cac`
+Groceries:ex = `=200`
+Fuel:ex = `=90`
+Second period = `=sum::ex`
 ```
 
-Qualified `CAC` declarations join both global and local `cac`/`ex` collections. A later successful `CAC` declaration that omits those qualifiers closes them. An unrelated label does not. This behavior is based only on declaration continuity, so the same note calculates identically with or without Markdown headings.
+The first total is 950 and closes the local `ex` accumulation. The next
+`ex` declaration opens a fresh one, so the second total is 290. A single-colon
+`sum:ex` still returns the note-wide total, 1240. Markdown structure never
+opens or closes scope.
 
 ## Expression markers and plugin compatibility
 
@@ -127,4 +134,6 @@ npm test
 npm run build
 ```
 
-The implementation and fixture-backed behavior are documented in [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md), [DESIGN_RECORD.md](DESIGN_RECORD.md), and [LOCAL_SCOPES_DESIGN.md](LOCAL_SCOPES_DESIGN.md).
+The language is specified in [SEMANTICS.md](SEMANTICS.md). Design rationale and
+local-scope examples live in [DESIGN_RECORD.md](DESIGN_RECORD.md) and
+[local-accumulations-design-record.md](local-accumulations-design-record.md).

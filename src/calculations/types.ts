@@ -23,7 +23,6 @@ export interface Declaration {
 	label: string;
 	normalizedLabel: string;
 	groups: string[];
-	localGroups: string[];
 	expressionSource: string;
 	sourceOffset: number;
 }
@@ -60,7 +59,6 @@ export interface LocalEvaluationContext {
 	active: Map<string, LocalAccumulation>;
 	completed: Map<string, LocalAccumulation[]>;
 	nextOrdinal: Map<string, number>;
-	qualifiersByLabel: Map<string, string[]>;
 }
 
 export interface InlineSource {

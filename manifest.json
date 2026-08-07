@@ -1,7 +1,7 @@
 {
 	"id": "obsidian-units",
 	"name": "Obsidian Units",
-	"version": "0.3.0",
+	"version": "0.4.0",
 	"minAppVersion": "1.13.0",
 	"description": "Soulver-style inline unit conversions for Obsidian notes.",
 	"author": "jwl",

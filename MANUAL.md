@@ -2,7 +2,10 @@
 
 Obsidian Units evaluates explicit calculations inside single-backtick inline code spans. It supports unit conversion, arithmetic, reusable variables, note-wide groups, and local accumulations. Calculations are evaluated from top to bottom within the current note.
 
-This manual describes the implemented behavior. For design rationale and future ideas, see [DESIGN_RECORD.md](DESIGN_RECORD.md) and [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
+This manual describes the selected language behavior. The grouped-calculation
+evaluator is being aligned with [SEMANTICS.md](SEMANTICS.md); see
+[DESIGN_RECORD.md](DESIGN_RECORD.md) for rationale and
+[units/CHANGES_SUMMARY.md](units/CHANGES_SUMMARY.md) for remaining gaps.
 
 ## Quick start
 
@@ -193,9 +196,10 @@ Obsidian Units recognizes one declaration per line. A declaration can appear as 
 
 The inline calculation associated with the declaration must be the declaration value, not unrelated inline code elsewhere on the line.
 
-## Note-wide groups
+## Declaration histories and groups
 
-Append one or more colon-prefixed sigils to a declaration label to place its value in note-wide groups:
+Every successful declaration joins the normalized history of its label. Append
+one or more colon-prefixed sigils to add cross-cutting group memberships:
 
 ```markdown
 CAC:ex = `=350.00`
@@ -203,91 +207,69 @@ OG&E:ex = `=200.00`
 Walmart:ex:gr = `=100.00`
 ```
 
-These declarations create ordinary variables named `CAC`, `OG&E`, and `Walmart`. They also add their successful values to the global groups `ex` and, where present, `gr`.
+These declarations create ordinary variables named `CAC`, `OG&E`, and
+`Walmart`. Each record belongs to its implicit label history (`cac`, `og&e`, or
+`walmart`) and also to the explicit `ex` and, where present, `gr` groups.
 
 ```markdown
+Total CAC = `=sum:cac`
 Total Expenses = `=sum:ex`
 Grocery Expenses = `=sum:gr`
 ```
 
-Groups retain every successful declaration entry. Variables and groups therefore differ when a label is repeated:
+Histories and groups retain every successful declaration record. Variables and
+aggregates therefore differ when a label is repeated:
 
 ```markdown
-CAC:ex = `=100`
+CAC = `=100`
 CAC:ex = `=50`
 Latest CAC = `=CAC`
-All CAC entries = `=sum:ex`
+All CAC entries = `=sum:cac`
 ```
 
-`Latest CAC` is 50, while `All CAC entries` is 150.
+`Latest CAC` is 50, while `All CAC entries` is 150. The second declaration is
+one record indexed by both `cac` and `ex`; membership does not copy its value.
+If implicit and explicit memberships overlap, aggregates deduplicate by
+declaration identity. `CAC:cac:ex` is valid but normally unnecessary.
 
 Sigils are case-insensitive and Unicode-normalized. They cannot contain whitespace or the structural characters used by the grammar. Duplicate sigils on one declaration are counted only once.
 
 ## Local accumulations
 
-Qualified declarations have two effects at the same time:
+Each history or group also has a current local accumulation. A declaration
+joins the active local accumulation for every history and sigil to which it
+belongs, opening one when necessary.
 
-1. They join the named note-wide groups.
-2. They join the active local accumulations with the same sigils.
-
-For example:
-
-```markdown
-CAC:cac:ex = `=135.00`
-```
-
-This declares the variable `CAC`, adds 135 to the global `cac` and `ex` groups, and adds 135 to the active local `cac` and `ex` accumulations.
-
-Local accumulation is controlled by declaration continuity, not by Markdown headings or sections. A later successful declaration with the same label closes any local sigils that it omits:
+A double-colon aggregate reads and then closes the queried local accumulation:
 
 ```markdown
-CAC:cac:ex = `=135.00`
-CAC:cac:ex = `=75.00`
-Current CAC block = `=sum::cac`
+Rent:ex = `=800.00`
+Power:ex = `=150.00`
+Water:ex = `=60.00`
+First period = `=sum::ex`
 
-CAC = `=150.00`
-Completed CAC block = `=sum::cac`
+Groceries:ex = `=200.00`
+Fuel:ex = `=90.00`
+Second period = `=sum::ex`
 ```
 
-The unqualified `CAC` declaration ends the preceding local `cac` and `ex` accumulations after its own expression has been evaluated. It still updates the global `CAC` variable, but its value is not added to either group.
+`First period` is 1010.00. Its aggregate closes local `ex` after evaluating.
+`Groceries` opens a fresh local `ex`, so `Second period` is 290.00. A global
+`sum:ex` after both periods is 1300.00.
 
-An unrelated label does not close the accumulation:
+Closure is selective. `sum::ex` closes only `ex`; other local histories and
+groups remain active. Filters affect the returned selection but still close
+the queried accumulation as a whole. Bare declarations and unrelated labels
+do not close anything merely by appearing.
 
-```markdown
-CAC:cac = `=135`
-Memo = `=1`
-CAC:cac = `=75`
-CAC Total = `=sum::cac`
-```
-
-`CAC Total` is 210.
-
-Qualifiers can be closed selectively:
-
-```markdown
-CAC:cac:ex = `=100`
-CAC:cac = `=50`
-```
-
-The second declaration continues local `cac` but closes local `ex` because the same `CAC` label omitted `ex`.
-
-A later qualified declaration can open a new accumulation:
-
-```markdown
-CAC:cac = `=100`
-CAC = `=0`
-First = `=sum::cac`
-
-CAC:cac = `=40`
-CAC = `=0`
-Second = `=sum::cac`
-```
-
-`First` is 100 and `Second` is 40.
-
-At end of file, active accumulations are treated as completed for evaluation provenance. A local aggregate reads the active accumulation when one exists; otherwise, it reads the most recently completed accumulation with that sigil.
-
-Older completed accumulations are not addressable by index or name. Local accumulations are intentionally lightweight and declaration-driven.
+If no accumulation is active, local aggregates re-evaluate the most recently
+closed accumulation's preserved declaration records. The closing function's
+numeric result is not cached as the accumulation: a block closed with `avg`
+can subsequently be read with `min`, `max`, `count`, or different filters.
+These reads do not reopen it. A new matching declaration starts a fresh member
+set. If no matching accumulation has ever existed, the evaluator reports an
+unknown-local-group error. Older closed accumulations are not addressable by
+index or name.
 
 ## Aggregate functions
 
@@ -332,7 +314,9 @@ Expense Total = `=sum:ex`
 Budget Remaining = `=Budget - Expense Total`
 ```
 
-An aggregate result cannot itself be declared as a group member. This prevents recursive or order-sensitive group membership.
+An aggregate result cannot be attached in a way that makes it a member of the
+aggregate that computes it. This prevents recursive or order-sensitive group
+membership.
 
 ## Aggregate filters
 
@@ -546,9 +530,10 @@ Display mode            `=5 ft to cm | value`
 - Evaluation is top-down; forward references are unsupported.
 - One declaration is recognized per line.
 - Aggregation is limited to dimensionless numeric values.
-- Aggregate results cannot be added directly to groups.
-- Local accumulations expose only the active or most recently completed accumulation for a sigil.
-- Local scope is declaration-driven; headings and other Markdown structure have no semantic role.
+- Recursive or order-sensitive aggregate membership is unsupported.
+- Local accumulations expose only the active or most recently closed accumulation.
+- A double-colon aggregate closes its queried local accumulation after evaluation.
+- Headings and other Markdown structure have no semantic role.
 - The marker migration command works on the active file, not the entire vault.
 - Plugin settings, including a customized marker, must be synchronized separately from note content.
 
@@ -564,4 +549,6 @@ npm test
 npm run build
 ```
 
-The build produces the Obsidian plugin bundle. See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for remaining planned work and [LOCAL_SCOPES_DESIGN.md](LOCAL_SCOPES_DESIGN.md) for the local-accumulation acceptance model.
+The build produces the Obsidian plugin bundle. See
+[SEMANTICS.md](SEMANTICS.md) for normative language rules and
+[DESIGN_RECORD.md](DESIGN_RECORD.md) for their rationale.

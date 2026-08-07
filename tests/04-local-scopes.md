@@ -2,46 +2,56 @@
 title: 04-local-scopes
 ---
 
-# Local scopes
+# Local aggregates close the group they read
 
-This fixture is an acceptance specification for the local-scope evaluator. It
-is intentionally not part of the passing fixture runner until local evaluation
-is implemented.
+This acceptance fixture defines the selected local-scope model. A
+double-colon aggregate reads the active local accumulation and closes that
+group after evaluation. The next member opens a fresh accumulation.
 
-## First accumulation
+## Distinct labels in two ledger periods
 
-CAC:cac:ex = `=135.00`
-Walmart:ex = `=80.00`
+Rent:ex = `=800.00`
+Power:ex = `=150.00`
+Water:ex = `=60.00`
+
+Period 1 = `=sum::ex` <!-- expect:value 1010.00 -->
+Repeat completed period = `=sum::ex` <!-- expect:value 1010.00 -->
+Global expenses after period 1 = `=sum:ex` <!-- expect:value 1010.00 -->
+
+Groceries:ex = `=200.00`
+Fuel:ex = `=90.00`
+
+Period 2 = `=sum::ex` <!-- expect:value 290.00 -->
+Global expenses after period 2 = `=sum:ex` <!-- expect:value 1300.00 -->
+
+## Closure is selective
+
+Visa:debt:ex = `=50.00`
+Cash:ex = `=25.00`
+
+Expenses only = `=sum::ex` <!-- expect:value 75.00 -->
+Debt remains active = `=sum::debt` <!-- expect:value 50.00 -->
+
+Visa:debt = `=10.00`
+New debt accumulation = `=sum::debt` <!-- expect:value 10.00 -->
+
+## Implicit label histories and deduplication
+
+CAC:ex = `=135.00`
 CAC:cac:ex = `=104.90`
-Aldi:ex = `=40.00`
 
 Latest CAC = `=CAC` <!-- expect:value 104.90 -->
-Local CAC = `=sum::cac` <!-- expect:value 239.90 -->
-Local expenses = `=sum::ex` <!-- expect:value 359.90 -->
-Local expense count = `=count::ex` <!-- expect:value 4 -->
-Local expenses without Walmart = `=sum::ex{!walmart}` <!-- expect:value 359.90 -->
+All CAC declarations = `=sum:cac` <!-- expect:value 239.90 -->
+Current CAC accumulation = `=sum::cac` <!-- expect:value 239.90 -->
+Current expense accumulation = `=sum::ex` <!-- expect:value 239.90 -->
 
-## Closing by returning to an unqualified declaration
+## Filters close the whole queried accumulation
 
-CAC = `=150.00`
+Store:shop:food = `=40.00`
+Market:shop:fuel = `=30.00`
 
-Latest CAC = `=CAC` <!-- expect:value 150.00 -->
-Most recently completed CAC = `=sum::cac` <!-- expect:value 239.90 -->
-Most recently completed expenses = `=sum::ex` <!-- expect:value 359.90 -->
-
-The unqualified CAC declaration closes both local accumulations because the
-most recent qualified CAC declaration participated in `cac` and `ex`.
-Walmart and Aldi declarations did not close either accumulation.
-
-## A new accumulation
-
-CAC:cac:ex = `=75.00`
-Walmart:ex:walmart = `=25.00`
-
-Latest CAC = `=CAC` <!-- expect:value 75.00 -->
-Second local CAC = `=sum::cac` <!-- expect:value 75.00 -->
-Second local expenses = `=sum::ex` <!-- expect:value 100.00 -->
-Filtered local expenses = `=sum::ex{walmart}` <!-- expect:value 25.00 -->
+Food selection = `=sum::shop{food}` <!-- expect:value 40.00 -->
+Repeated closed shop = `=sum::shop` <!-- expect:value 70.00 -->
 
 ## Unknown local group
 
@@ -49,10 +59,9 @@ Filtered local expenses = `=sum::ex{walmart}` <!-- expect:value 25.00 -->
 
 ## Markdown independence
 
-> Formatting does not establish or close scope.
+> Formatting does not establish scope.
 >
-> CAC:cac = `=5.00`
+> One:quoted = `=5.00`
+> Two:quoted = `=7.00`
 >
-> Local CAC inside a blockquote = `=sum::cac` <!-- expect:value 80.00 -->
-
-The active local `cac` accumulation is implicitly completed at end-of-file.
+> Quoted total = `=sum::quoted` <!-- expect:value 12.00 -->
