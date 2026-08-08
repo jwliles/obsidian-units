@@ -58,6 +58,40 @@ Total CAC = `=sum:cac`    <!-- 500.00 -->
 No new declaration syntax is introduced merely to make newer constructs look
 uniform.
 
+### Reserved regional names
+
+`top` and `bottom` are case-insensitive reserved names after the same
+normalization used for labels and memberships. The reservation applies
+everywhere a normalized identifier or membership name is expected, including:
+
+- declaration labels;
+- declaration sigils;
+- scalar variable references;
+- global and local aggregate targets;
+- aggregate filter terms.
+
+These forms therefore produce a reserved-identifier diagnostic:
+
+```markdown
+top = `=10`
+CAC:top = `=10`
+`=sum:top`
+`=sum@top`
+`=sum:>{top}`
+```
+
+The reservation applies only when the entire normalized name equals `top` or
+`bottom`. Multiword names remain valid:
+
+```markdown
+Top Amount = `=10`
+bottom line = `=20`
+```
+
+This prevents structural keywords from remaining available through a parallel
+membership namespace and keeps parsing consistent across declarations,
+aggregates, and filters.
+
 ---
 
 ## 2. Three aggregation forms
@@ -149,12 +183,12 @@ bounded portion of the note.
 This supports blocks whose declarations do not otherwise need a shared sigil:
 
 ```markdown
-`=:>`
+`=top`
 
 CAC = `=150.00`
 Reach = `=135.00`
 
-`=:<`
+`=bottom`
 
 Q1 Total = `=sum:>`             <!-- 285.00 -->
 ```
@@ -165,31 +199,37 @@ close, or partition a region. Only Units structural markers do so.
 ### Regional structural markers
 
 ```text
-:>    open a region
-:<    close the active region
+top       open a region
+bottom    close the active region
 ```
 
 With the default expression marker, they are written as:
 
 ```markdown
-`=:>`
-`=:<`
+`=top`
+`=bottom`
 ```
 
-Regional boundaries are strictly balanced. Opening a region while another
-region is active is a structural error; it does not implicitly close or replace
-the first region. Consecutive regions require an explicit close between them:
+Structural keywords are case-insensitive after normalization, so standalone
+`=Top` and `=BOTTOM` are the same markers as `=top` and `=bottom`. Lowercase is
+the canonical source spelling.
+
+Completed regional structure is strictly balanced. An active region at EOF is
+temporarily permitted during editing and produces a warning. Opening a region
+while another region is active is a structural error; it does not implicitly
+close or replace the first region. Consecutive regions require an explicit
+close between them:
 
 ```markdown
-`=:>`
+`=top`
 A = `=10`
 
-`=:<`
+`=bottom`
 
-`=:>`
+`=top`
 B = `=20`
 
-`=:<`
+`=bottom`
 ```
 
 `A` belongs to the first region and `B` belongs to the second.
@@ -198,8 +238,8 @@ Both an opener while a region is active and a closer while no region is active
 are structural errors. Each marker therefore has exactly one state transition:
 
 ```text
-:>    closed → open
-:<    open → closed
+top       closed → open
+bottom    open → closed
 ```
 
 This makes duplicate markers detectable and prevents a missing close from
@@ -210,7 +250,7 @@ being silently accepted as region redeclaration.
 A regional aggregate reads without changing regional state:
 
 ```markdown
-`=:>`
+`=top`
 
 A = `=100`
 B = `=50`
@@ -221,11 +261,11 @@ C = `=25`
 
 Running again = `=sum:>`        <!-- 175 -->
 
-`=:<`
+`=bottom`
 ```
 
-Only `:<` ends admission to the active region. A new `:>` is invalid until the
-active region has been explicitly closed.
+Only `bottom` ends admission to the active region. A new `top` is invalid until
+the active region has been explicitly closed.
 
 This differs intentionally from local aggregation. Local membership has a
 named-membership filter, so unrelated declarations do not join while the
@@ -244,15 +284,15 @@ independently of when or whether a total is read.
 This permits totals to sit outside their membership boundary:
 
 ```markdown
-`=:>`
+`=top`
 A = `=10`
 B = `=20`
-`=:<`
+`=bottom`
 
 Total = `=sum:>`                <!-- 30 -->
 ```
 
-Declarations written after `:<` and before the next `:>` do not join the
+Declarations written after `bottom` and before the next `top` do not join the
 completed region and do not alter later rereads of it.
 
 Older completed regions are not addressable by index or name.
@@ -263,17 +303,17 @@ A regional aggregate can be assigned to a variable when its result must remain
 available after a later region becomes current:
 
 ```markdown
-`=:>`
+`=top`
 Q1 CAC = `=150`
 Q1 Reach = `=135`
-`=:<`
+`=bottom`
 
 Q1 Total:period-total = `=sum:>` <!-- stores 285 -->
 
-`=:>`
+`=top`
 Q2 CAC = `=140`
 Q2 Reach = `=120`
-`=:<`
+`=bottom`
 
 Q2 Total:period-total = `=sum:>` <!-- stores 260 -->
 
@@ -289,14 +329,14 @@ Repeated labels can provide the same result history through their implicit
 membership:
 
 ```markdown
-`=:>`
+`=top`
 A = `=10`
-`=:<`
+`=bottom`
 Period Total = `=sum:>`
 
-`=:>`
+`=top`
 B = `=20`
-`=:<`
+`=bottom`
 Period Total = `=sum:>`
 
 All Periods = `=sum:period total`
@@ -361,9 +401,9 @@ Evaluation order is:
 ```text
 active or latest completed region
     ↓
-successful eligible declarations
+successful regional members
     ↓
-exclude directly aggregate-derived declarations
+exclude aggregate-containing members from selection by default
     ↓
 apply ordinary membership filters
     ↓
@@ -372,21 +412,26 @@ aggregate
 
 ---
 
-## 6. Aggregate-derived declarations
+## 6. Aggregate-containing declarations
 
-A declaration whose own expression is an aggregate is excluded from regional
-membership by default.
+An aggregate-containing declaration is a declaration whose own successfully
+parsed value expression contains an aggregate expression at any depth.
+
+Containing an aggregate does not change regional membership. A successful
+declaration between `top` and `bottom` remains a member of that region, but an
+aggregate-containing member is excluded from regional aggregate selection by
+default.
 
 ```markdown
-`=:>`
+`=top`
 
 A = `=100`
 B = `=50`
-Subtotal = `=sum:>`             <!-- 150; excluded from the region -->
+Subtotal = `=sum:>`             <!-- excluded from later regional reads by default -->
 C = `=25`
 Grand Total = `=sum:>`          <!-- 175, not 325 -->
 
-`=:<`
+`=bottom`
 ```
 
 This rule prevents direct subtotal double-counting, which is particularly
@@ -395,8 +440,9 @@ likely because regional reads do not close their region.
 The rule is syntactic and intentionally narrow:
 
 ```markdown
-Subtotal = `=sum:ex`            <!-- directly aggregate-derived; excluded -->
-Adjusted = `=Subtotal + 10`     <!-- scalar expression; not excluded -->
+A = `=sum:ex`                   <!-- aggregate-containing; excluded by default -->
+B = `=sum:ex + 10`              <!-- aggregate-containing; excluded by default -->
+C = `=A + 10`                   <!-- not aggregate-containing -->
 ```
 
 It does not claim to prevent all dependency-based double-counting. Ordinary
@@ -410,11 +456,11 @@ Adjusted = `=A + B`
 
 Detecting that overlap reliably requires arithmetic dependency provenance,
 which the current evaluator does not maintain. That is a possible future
-diagnostic rather than part of regional membership semantics.
+diagnostic rather than part of regional selection semantics.
 
-No widening modifier is introduced now. A mechanism for explicitly including
-direct aggregate results should be added only when a concrete authoring need
-establishes its syntax and expected safety behavior.
+Aggregate-containing members cannot currently be included in regional
+aggregate selection. Both the widening behavior and its syntax are
+deliberately deferred until a concrete use case establishes their requirements.
 
 ---
 
@@ -427,16 +473,18 @@ author intent.
 
 The following conditions are detectable:
 
-- `:>` with an active region: error at the second opener;
-- `:<` with no active region: error at the close marker;
+- `top` with an active region: error at the second `top` marker;
+- `bottom` with no active region: error at the `bottom` marker;
 - regional read before any region has existed: error at the aggregate;
-- malformed regional marker: error at that marker;
+- `top` or `bottom` used as a normalized identifier or membership name:
+  reserved-identifier error at that use;
 - an open region at end of file: document-level warning associated with its
   opener.
 
-An open region at EOF is initially a warning rather than a hard evaluation
-error. During editing, a region may legitimately remain temporarily open, and
-all expressions already evaluated inside it still have deterministic results.
+Completed regional structure is strictly balanced. An open region at EOF is
+temporarily permitted during editing and produces a warning rather than a hard
+evaluation error. All expressions already evaluated inside it still have
+deterministic results.
 
 ### Valid but unintended structure
 
@@ -489,16 +537,21 @@ Distance = `=5 mi to km | value`
 
 Regional boundaries do not interact with either use.
 
-Markdown tables require special care because a table parser may treat a pipe
-inside inline code as a cell separator. Table documentation and fixtures
-should specify whether expression pipes must be escaped in Obsidian source.
+Pipe-delimited ledger fields remain supported. Formal Markdown tables are not
+a supported declaration host, and table-specific parsing or escaping behavior
+is not defined by this proposal.
 
 ---
 
-## 10. Reading View and Live Preview
+## 10. Source Mode, Live Preview, and Reading View
 
-Live Preview remains the authoring surface and reveals the full source when the
-cursor intersects an expression.
+Source Mode exposes raw Units syntax continuously.
+
+Live Preview retains Obsidian's normal render-and-reveal behavior: expressions
+render as results until the cursor intersects them, at which point their full
+source is exposed for editing.
+
+Additional concealment and presentation cleanup are limited to Reading View.
 
 Reading View may simplify declarations by:
 
@@ -520,9 +573,9 @@ This is presentation behavior only. It must not affect evaluation.
 
 ## 11. Markdown and plugin compatibility
 
-`@`, `:>`, and `:<` occur inside marked inline code and do not conflict with
-core Markdown blockquotes, HTML, properties, links, or ordinary uses of those
-characters.
+`top`, `bottom`, `@`, and `:>` occur inside marked inline code and do not
+conflict with core Markdown blockquotes, HTML, properties, links, or ordinary
+uses of those words or characters outside Units expressions.
 
 The meaningful compatibility boundary remains the configurable expression
 marker. Dataview uses `=` as its default inline-query prefix, so a vault using
@@ -546,12 +599,14 @@ sum:>
 The document language gains structural expressions but remains small:
 
 ```text
-DECLARATION       := LABEL MEMBERSHIPS? " = " MARKED_EXPRESSION
+UNITS_NODE        := DECLARATION | VALUE_EXPRESSION | STRUCTURAL
+
+DECLARATION       := LABEL MEMBERSHIPS? " = " MARKED_VALUE_EXPRESSION
 MEMBERSHIPS       := (":" MEMBERSHIP)+
 
-EXPRESSION        := STRUCTURAL | AGGREGATE | SCALAR
+VALUE_EXPRESSION  := AGGREGATE | SCALAR
 
-STRUCTURAL        := ":>" | ":<"
+STRUCTURAL        := "top" | "bottom"
 
 AGGREGATE         := FUNCTION TARGET FILTER*
 FUNCTION          := "sum" | "count" | "avg" | "median" | "min" | "max"
@@ -563,23 +618,46 @@ This grammar is illustrative rather than a complete Unicode or whitespace
 specification. The normative grammar should preserve existing label,
 membership, filter, and normalization rules.
 
-Recognized structural targets must be parsed before generic membership names.
-A structural token cannot fall through and become an ordinary identifier.
+Structural nodes are recognized only as exact standalone marked expressions.
+Matching is case-insensitive after normalization. They cannot be declaration
+values and do not fall through into scalar parsing. The normalized names `top`
+and `bottom` are rejected everywhere else an identifier or membership is
+expected. A different word such as `topp` is an ordinary scalar identifier and
+receives the ordinary unknown-variable diagnostic when unresolved; it is not a
+malformed regional marker. The regional target `:>` remains distinct from both
+structural keywords and generic membership names.
 
 ---
 
 ## 13. Implementation model
 
-The expression AST should distinguish three node families:
+The document AST should separate structural nodes from value-producing
+expressions:
 
 ```ts
-type ExpressionNode = ScalarExpressionNode
-  | AggregateExpressionNode
-  | StructuralExpressionNode;
+type UnitsNode = DeclarationNode
+  | ValueExpressionNode
+  | StructuralNode;
 
-type StructuralExpressionNode =
-  | { kind: 'region-open' }
-  | { kind: 'region-close' };
+interface DeclarationNode {
+  expression: ValueExpressionNode;
+}
+
+type ValueExpressionNode = ScalarExpressionNode
+  | AggregateExpressionNode;
+
+type StructuralNode =
+  | { kind: 'region-top' }
+  | { kind: 'region-bottom' };
+```
+
+Structural nodes do not produce values and cannot appear on the right-hand
+side of declarations. Aggregate parsing must also report whether a value
+expression contains an aggregate at any depth so aggregate containment can be
+recorded syntactically without following dependency provenance:
+
+```ts
+containsAggregate: boolean;
 ```
 
 Aggregate scope becomes:
@@ -607,8 +685,9 @@ Document-level warnings require the evaluation index to expose diagnostics
 that are not ordinary expression results. An unclosed-region warning should be
 anchored to its opener rather than to a synthetic invisible expression at EOF.
 
-Direct aggregate exclusion should be represented explicitly on the declaration
-record, rather than inferred later from numeric provenance.
+`containsAggregate` should be represented explicitly on the declaration record
+and consulted when constructing a regional aggregate selection, rather than
+inferred later from numeric provenance.
 
 ---
 
@@ -628,9 +707,9 @@ Regional aggregation should have its own fixture covering at least:
 - open, read, add, and reread shows a growing active result;
 - close followed by read returns the latest completed region;
 - repeated reads of a completed region are stable;
-- a new opener after an explicit close creates a distinct current region;
-- an opener while active errors without implicitly closing the first region;
-- a close without an active region errors;
+- a new `top` after an explicit `bottom` creates a distinct current region;
+- `top` while active errors without implicitly closing the first region;
+- `bottom` without an active region errors;
 - a read before any region errors;
 - declared regional results remain available after later regions become
   current;
@@ -646,10 +725,14 @@ Regional aggregation should have its own fixture covering at least:
 - positive, negative, OR, and AND filters work over regional candidates;
 - selected quantities produce the existing quantity diagnostic.
 
-### Aggregate-derived records
+### Aggregate-containing records
 
-- a regional subtotal inside an open region is excluded from later reads;
-- a global or local aggregate declaration inside a region is also excluded;
+- a regional subtotal inside an open region remains a member but is excluded
+  from later regional aggregate selections by default;
+- a global or local aggregate declaration inside a region remains a member but
+  is also excluded from regional aggregate selection by default;
+- an expression containing an aggregate inside larger arithmetic is
+  aggregate-containing and excluded from regional selection by default;
 - an ordinary scalar expression referencing an aggregate remains eligible;
 - the limitation around indirect dependency overlap is documented in the
   fixture rather than silently implied to be solved.
@@ -667,7 +750,7 @@ Regional aggregation should have its own fixture covering at least:
 - standalone structural markers do not leave unintended Reading View debris;
 - structural markers work in lists and blockquotes;
 - fenced code and HTML comments remain excluded;
-- table behavior involving expression pipes is explicitly tested.
+- formal Markdown tables are not treated as supported declaration hosts.
 
 ---
 
@@ -687,10 +770,10 @@ CAC:ex = `=150.00`
     current or latest local accumulation; closes an active accumulation
     after a successful read
 
-`=:>`
+`=top`
     open a region; error if one is already active
 
-`=:<`
+`=bottom`
     close the active region; error if none is active
 
 `=sum:>`
@@ -709,8 +792,8 @@ The central design principles are:
 4. Keep regional reads observational rather than state-closing.
 5. Allow reads of the latest completed region so totals can sit outside their
    membership boundary.
-6. Exclude direct aggregate declarations from regions by default to prevent
-   routine subtotal duplication.
+6. Exclude aggregate-containing members from regional aggregate selection by
+   default to prevent routine subtotal duplication.
 7. Do not claim that this syntactic exclusion solves arbitrary dependency
    overlap.
 8. Keep filters limited to membership logic.
@@ -720,87 +803,12 @@ The central design principles are:
 
 ---
 
-## 16. Provisional regional boundary spelling
-
-The regional lifecycle above is independent of the exact spelling of its
-boundary markers. The original deferred question compared compact `:>` and
-`:<` markers with explicit forms such as `region:start` and `region:end`.
-
-Compact punctuation minimizes source length but is abstract and requires the
-author to remember which direction opens or closes a region. Fully qualified
-keywords are self-documenting, but repeating `region` is unnecessarily verbose
-when the configured Units expression marker already establishes ownership of
-the expression.
-
-Source residue is not a controlling objection. Other popular Obsidian data
-plugins require explicit source constructs that become inert Markdown when the
-plugin is unavailable. Units expressions behave similarly, and a region adds
-only two structural lines regardless of how many declarations it contains.
-
-### Provisional direction
-
-Replace the structural `:>` and `:<` markers with exact standalone `top` and
-`bottom` expressions:
-
-```markdown
-`=top`
-
-A = `=10`
-B = `=20`
-
-`=bottom`
-
-Total = `=sum:>`
-```
-
-The terms describe spatial boundaries rather than operations:
-
-```text
-top       upper boundary of a region
-bottom    lower boundary of a region
-:>        this region
-```
-
-Their state transitions remain strictly balanced:
-
-```text
-top       closed → open; error if a region is already active
-bottom    open → closed; error if no region is active
-```
-
-`top` and `bottom` neither calculate nor declare values. They are recognized
-only as exact standalone structural expressions.
-
-The regional aggregate target remains `:>`:
-
-```text
-sum:>     aggregate this region
-```
-
-Here, “this region” means the active region, or the latest completed region
-when none is active. The target never opens or closes regional state. Its
-utility does not depend on sharing a character with the boundary markers.
-
-This preserves the scope model:
-
-```text
-sum:ex    named note-wide membership
-sum@ex    current or latest named local accumulation
-sum:>     current or latest positional region
-```
-
-This spelling is provisional. If accepted, `top` and `bottom` should replace
-`:>` and `:<` only in their structural-marker role throughout the normative
-examples, grammar, diagnostics, and tests. Regional aggregate targets such as
-`sum:>` and `median:>` remain unchanged.
-
----
-
-## 17. Deferred questions
+## 16. Deferred questions
 
 The following are deliberately deferred:
 
-- whether aggregate-derived regional membership ever needs an explicit opt-in;
+- whether a concrete use case justifies semantics and syntax for widening a
+  regional selection to include aggregate-containing members;
 - whether dependency provenance should support double-counting warnings;
 - whether a demonstrated need to re-query original members justifies named or
   indexed historical regions beyond stored aggregate snapshots;
