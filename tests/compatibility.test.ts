@@ -48,14 +48,18 @@ assert.equal(isValidExpressionMarker('not valid'), false);
 const markerUpdate = planMarkerUpdate([
 	'CAC:ex = `=200`',
 	'`=sum:ex`',
+	'`=top`',
+	'`=bottom`',
 	'`=30 ft to m`',
 	'`=2 + 2`',
 	'`=this.file.name`',
 ].join('\n'), '=', '~', settings);
-assert.equal(markerUpdate.changed, 3);
+assert.equal(markerUpdate.changed, 5);
 assert.equal(markerUpdate.ambiguous, 2);
 assert.match(markerUpdate.text, /CAC:ex = `~200`/);
 assert.match(markerUpdate.text, /`~sum:ex`/);
+assert.match(markerUpdate.text, /`~top`/);
+assert.match(markerUpdate.text, /`~bottom`/);
 assert.match(markerUpdate.text, /`~30 ft to m`/);
 assert.match(markerUpdate.text, /`=2 \+ 2`/);
 

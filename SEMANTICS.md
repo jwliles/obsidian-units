@@ -3,7 +3,8 @@
 ## Status and scope
 
 This document is the normative specification for declarations, variables,
-membership histories, global aggregates, and local accumulations. The manual
+membership histories, global aggregates, local accumulations, and regional
+aggregation. The manual
 explains these rules for users; `DESIGN_RECORD.md` records their rationale.
 
 “Must,” “must not,” and “only” describe behavioral commitments. Presentation,
@@ -12,11 +13,11 @@ by `MANUAL.md` except where they affect declarations or aggregation.
 
 ## Expression ownership and scanning
 
-Only single-backtick inline code beginning with the configured Units marker is
+Only single-backtick inline code beginning with the configured Quantities marker is
 evaluated. The default marker is `=`:
 
 ```markdown
-CAC = `=150.00` <!-- Units declaration -->
+CAC = `=150.00` <!-- Quantities declaration -->
 CAC = `150.00`  <!-- ordinary inline code; no declaration -->
 ```
 
@@ -25,8 +26,11 @@ marker may receive an incorrect-marker diagnostic, but it creates no value or
 membership.
 
 Fenced code blocks and HTML comments are excluded from scanning. Markdown
-headings, lists, blockquotes, tables, emphasis, and blank lines affect
-presentation only; they do not establish evaluation or accumulation scope.
+headings, lists, blockquotes, emphasis, and blank lines affect presentation
+only; they do not establish evaluation or accumulation scope. Pipe-delimited
+ledger fields are supported. Formal Markdown tables are not a supported
+declaration host; behavior that results from a table row resembling a ledger
+line is unspecified.
 
 ## Declaration grammar
 
@@ -59,14 +63,18 @@ Explicit sigils:
 
 - are compared case-insensitively after NFKC normalization;
 - contain at most 64 Unicode code points;
-- cannot contain whitespace or `:`, `=`, `{`, `}`, `,`, `!`, `|`, or a
-  backtick;
+- cannot contain whitespace, arithmetic operators, parentheses, `:`, `=`,
+  `{`, `}`, `,`, `!`, `|`, or a backtick;
 - are deduplicated within one declaration.
 
 Labels are compared case-insensitively after NFKC normalization. Leading and
 trailing whitespace is removed, internal whitespace is collapsed, and common
 Markdown formatting characters are ignored for lookup. Diagnostics should
 retain the source spelling presented by the user.
+
+The normalized names `top` and `bottom` are reserved everywhere a label,
+sigil, variable identifier, aggregate target, or filter membership is expected.
+Multiword names such as `Top Amount` and `bottom line` remain valid.
 
 ## Evaluation order and successful records
 
@@ -138,7 +146,8 @@ zero or more filter clauses:
 
 ```text
 FUNCTION :  TARGET {FILTER...}  global
-FUNCTION :: TARGET {FILTER...}  local
+FUNCTION @  TARGET {FILTER...}  local
+FUNCTION :>        {FILTER...}  regional
 ```
 
 Function names are case-insensitive. The supported functions are:
@@ -146,8 +155,15 @@ Function names are case-insensitive. The supported functions are:
 - `sum`: arithmetic sum of selected values;
 - `count`: number of selected declaration records;
 - `avg`: arithmetic mean;
+- `median`: numerically sorted middle value, or the arithmetic mean of the two
+  middle values for an even-sized selection;
 - `min`: minimum selected value;
 - `max`: maximum selected value.
+
+A named aggregate target ends before `+`, `-`, `*`, `/`, or `^`, without a
+whitespace requirement. This permits aggregates inside compact scalar
+expressions such as `sum:ex+10`. Those operators and parentheses are therefore
+not valid membership-name characters.
 
 Only selected dimensionless numeric records can be aggregated. If the selected
 members include a unit-bearing quantity, aggregation fails. A quantity excluded
@@ -160,9 +176,9 @@ For a known target whose filters select no records:
 
 - `sum` returns `0`;
 - `count` returns `0`;
-- `avg`, `min`, and `max` fail with an empty-selection error.
+- `avg`, `median`, `min`, and `max` fail with an empty-selection error.
 
-`count` has integer scale. For `sum`, `avg`, `min`, and `max`, the greatest
+`count` has integer scale. For `sum`, `avg`, `median`, `min`, and `max`, the greatest
 written decimal scale among selected numeric members becomes the result's
 minimum presentation scale. Additional digits required by the computed value
 remain visible up to configured display precision. Empty `sum` has integer
@@ -194,17 +210,17 @@ When a declaration record belongs to a target:
 Because one record can have several memberships, it can join several
 independent local accumulations simultaneously.
 
-A successful double-colon aggregate reads the active accumulation for its
+A successful `@` aggregate reads the active accumulation for its
 target and closes that entire accumulation after producing the result:
 
 ```markdown
 Rent:ex = `=800.00`
 Power:ex = `=150.00`
-Total = `=sum::ex` <!-- 950.00; then ex closes -->
+Total = `=sum@ex` <!-- 950.00; then ex closes -->
 
 Groceries:ex = `=200.00` <!-- opens a fresh ex -->
 Fuel:ex = `=90.00`
-Total = `=sum::ex` <!-- 290.00; then ex closes -->
+Total = `=sum@ex` <!-- 290.00; then ex closes -->
 ```
 
 The following ordering rules are normative:
@@ -214,8 +230,8 @@ The following ordering rules are normative:
 - filters change the returned selection but closure still applies to the whole
   queried accumulation;
 - a successful filtered `sum` or `count` that returns zero still closes;
-- a failed local aggregate does not close, including an empty `avg`, `min`, or
-  `max`;
+- a failed local aggregate does not close, including an empty `avg`, `median`,
+  `min`, or `max`;
 - bare declarations, same-label redeclarations, unrelated declarations, and
   Markdown structure never close an accumulation;
 - a global aggregate never closes an accumulation.
@@ -239,10 +255,10 @@ those preserved members:
 Low:stats = `=2.00`
 High:stats = `=8.00`
 
-Average = `=avg::stats` <!-- 5.00; closes stats -->
-Minimum = `=min::stats` <!-- 2.00 from preserved members -->
-Maximum = `=max::stats` <!-- 8.00 -->
-Count = `=count::stats` <!-- 2 -->
+Average = `=avg@stats` <!-- 5.00; closes stats -->
+Minimum = `=min@stats` <!-- 2.00 from preserved members -->
+Maximum = `=max@stats` <!-- 8.00 -->
+Count = `=count@stats` <!-- 2 -->
 ```
 
 Reads of a completed accumulation do not reopen it, create another completed
@@ -255,6 +271,51 @@ aggregate fails with an unknown-local-group error.
 
 At end of file, active accumulations are marked completed for provenance and
 trace purposes. This does not retroactively change any evaluated result.
+
+## Regional aggregation
+
+Exact standalone `top` and `bottom` expressions delimit positional regions:
+
+```markdown
+`=top`
+A = `=10`
+B = `=20`
+`=bottom`
+
+Total = `=sum:>` <!-- 30 -->
+```
+
+The keywords are case-insensitive after normalization and lowercase is
+canonical. `top` opens a region and errors if one is already active. `bottom`
+closes the active region and errors if none is active. Completed structure is
+strictly balanced; an active region at EOF produces an `unclosed-region`
+warning anchored to its opener.
+
+Reading View conceals valid structural markers rather than rendering them as
+values. It also conceals explicit declaration sigils while retaining the label,
+assignment punctuation, and rendered value. This is presentation only and
+cannot alter source, parsing, evaluation, or membership. Source Mode and Live
+Preview retain complete syntax. Diagnostics take precedence over concealment.
+An otherwise-empty paragraph or list item hosting a concealed marker may also
+be suppressed in Reading View.
+
+Every successful declaration between the markers becomes a regional member.
+Markdown structure has no effect. A regional aggregate reads the active region,
+or the latest completed region when none is active. It never closes the region.
+If no region has existed, it reports `unknown-region`.
+
+All aggregate functions and membership filters work with the `:>` target:
+
+```markdown
+`=sum:>`
+`=median:>{food}`
+```
+
+An aggregate-containing declaration is one whose own successfully parsed value
+expression contains an aggregate at any depth. It remains a regional member but
+is excluded from regional aggregate selection. There is currently no widening
+syntax. Ordinary derived expressions that merely reference aggregate results
+remain eligible.
 
 ## Filters
 
@@ -280,7 +341,7 @@ sum:ex{food,fuel}{!paid}   ex AND (food OR fuel) AND NOT paid
 A filter term does not need an independently populated history. It may simply
 match no candidate members.
 
-## Aggregate-derived declarations and recursion
+## Aggregate-containing declarations and recursion
 
 A successful aggregate may be assigned to a label and reused as a variable or
 aggregated through its implicit label history:
@@ -319,11 +380,12 @@ declaration responsible for the close.
 - A record contributes at most once to any aggregate result.
 - Variable lookup uses the latest successful preceding record.
 - Aggregation uses all selected successful preceding records in its chosen
-  global history or local accumulation.
+  global history, local accumulation, or region.
 - Global reads never mutate local state.
-- Only a successful double-colon aggregate closes local state.
+- Only a successful `@` aggregate closes local state.
 - Local closure occurs after evaluation and affects only the queried target.
 - Completed accumulations retain re-aggregatable member records.
+- Only `bottom` closes regional state; regional reads are observational.
 - Failed declarations and failed aggregates produce no declaration record or
   closure side effect.
 - Later declarations never rewrite earlier results.

@@ -1,9 +1,10 @@
 import { ExpressionParseOutcome } from './ast';
-import { parseAggregate } from './aggregate';
+import { findAggregateOccurrences, parseAggregate } from './aggregate';
 
 export function parseExpression(source: string): ExpressionParseOutcome {
 	const aggregate = parseAggregate(source);
-	if (aggregate.kind === 'error') return { kind: 'error', code: 'aggregate-syntax', message: aggregate.message };
+	const embedded = findAggregateOccurrences(source);
+	if (aggregate.kind === 'error' && !embedded.length) return { kind: 'error', code: aggregate.code ?? 'aggregate-syntax', message: aggregate.message };
 	if (aggregate.kind === 'success') {
 		return {
 			kind: 'success',
@@ -17,5 +18,5 @@ export function parseExpression(source: string): ExpressionParseOutcome {
 			},
 		};
 	}
-	return { kind: 'success', node: { kind: 'scalar', source } };
+	return { kind: 'success', node: { kind: 'scalar', source, aggregates: embedded } };
 }

@@ -1,16 +1,12 @@
 import { strict as assert } from 'node:assert';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { DEFAULT_SETTINGS, evaluateCompatibilityExpression } from '../main';
 import { evaluateDocument } from '../src/document/evaluation-index';
 
-const fixtureFiles = [
-	'tests/01-membership-and-declaration-identity.md',
-	'tests/02-filter-matrix.md',
-	'tests/03-scope-and-errors.md',
-	'tests/04-local-scopes.md',
-	'tests/05-local-accumulations.md',
-	'tests/06-august-ledger.md',
-];
+const fixtureFiles = readdirSync('tests')
+	.filter((name) => /^\d{2}-.*\.md$/.test(name))
+	.sort()
+	.map((name) => `tests/${name}`);
 
 const failures: string[] = [];
 let assertions = 0;
@@ -22,23 +18,34 @@ for (const file of fixtureFiles) {
 		formatNumber: formatFixtureNumber,
 		evaluateCompatibility: (expression, values) => evaluateCompatibilityExpression(expression, values, DEFAULT_SETTINGS),
 	});
+	const structures = new Map(index.structures().map((entry) => [entry.source.from, entry.node.kind]));
+	const diagnostics = new Map(index.diagnostics().map((item) => [item.offset, item]));
 	let fileAssertions = 0;
 	for (const entry of index.entries()) {
 		const followingLines = source.slice(entry.source.to).split('\n');
 		const commentSource = followingLines[0].includes('<!--')
 			? followingLines[0]
 			: followingLines[1]?.trimStart().startsWith('<!--') ? followingLines[1] : '';
-		const expected = commentSource.match(/<!--\s*expect:(value|error)\s+([^\s>]+)/i);
+		const expected = commentSource.match(/<!--\s*expect:(value|error|structure|warning)\s+([^\s>]+)/i);
 		if (!expected) continue;
 
 		assertions++;
 		fileAssertions++;
 		const description = `${file}:${lineAt(source, entry.source.from)} ${entry.source.content}`;
-		if (expected[1].toLowerCase() === 'value') {
+		const expectation = expected[1].toLowerCase();
+		if (expectation === 'value') {
 			if (entry.outcome.kind !== 'success') {
 				failures.push(`${description}: expected value ${expected[2]}, got ${describeOutcome(entry.outcome)}`);
 			} else if (entry.outcome.display !== expected[2]) {
 				failures.push(`${description}: expected value ${expected[2]}, got ${entry.outcome.display}`);
+			}
+		} else if (expectation === 'structure') {
+			const actual = structures.get(entry.source.from);
+			if (actual !== expected[2]) failures.push(`${description}: expected structure ${expected[2]}, got ${actual ?? 'none'}`);
+		} else if (expectation === 'warning') {
+			const actual = diagnostics.get(entry.source.from);
+			if (!actual || actual.severity !== 'warning' || actual.code !== expected[2]) {
+				failures.push(`${description}: expected warning ${expected[2]}, got ${actual ? `${actual.severity} ${actual.code}` : 'none'}`);
 			}
 		} else if (entry.outcome.kind !== 'error') {
 			failures.push(`${description}: expected error ${expected[2]}, got ${describeOutcome(entry.outcome)}`);
@@ -49,7 +56,7 @@ for (const file of fixtureFiles) {
 	assert.ok(fileAssertions > 0, `${file} contains no executable expectations`);
 }
 
-assert.ok(assertions >= 70, `Expected at least 70 fixture assertions, found ${assertions}`);
+assert.ok(assertions >= 120, `Expected at least 120 fixture assertions, found ${assertions}`);
 if (failures.length) {
 	throw new assert.AssertionError({
 		message: `${failures.length} of ${assertions} fixture assertions failed:\n${failures.join('\n')}`,

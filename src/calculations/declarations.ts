@@ -2,6 +2,7 @@ import { normalizeLabel, normalizeSigil } from './normalize';
 import { Declaration, EvaluationDiagnostic } from './types';
 
 const MAX_SIGIL_LENGTH = 64;
+const RESERVED_NAMES = new Set(['top', 'bottom']);
 
 export type DeclarationParseOutcome =
 	| { kind: 'none' }
@@ -24,6 +25,8 @@ export function parseDeclaration(prefix: string, expressionSource: string, sourc
 	const label = parts.shift()!.trim();
 	if (!label) return error('invalid-label', 'A declaration requires a non-empty label.', sourceOffset);
 	if (label.includes(':')) return error('invalid-label', 'Literal colons are not supported in variable labels.', sourceOffset);
+	const normalizedLabel = normalizeLabel(label);
+	if (RESERVED_NAMES.has(normalizedLabel)) return error('reserved-identifier', `"${label}" is reserved for regional structure.`, sourceOffset);
 
 	const groups: string[] = [];
 	for (const rawSigil of parts) {
@@ -32,7 +35,8 @@ export function parseDeclaration(prefix: string, expressionSource: string, sourc
 		}
 		const sigil = normalizeSigil(rawSigil.trim());
 		if (!sigil) return error('invalid-sigil', 'Group sigils cannot be empty.', sourceOffset);
-		if (/\s|[=:{},!|`]/u.test(sigil) || Array.from(sigil).length > MAX_SIGIL_LENGTH) {
+		if (RESERVED_NAMES.has(sigil)) return error('reserved-identifier', `"${rawSigil}" is reserved for regional structure.`, sourceOffset);
+		if (/\s|[=:{},!|`+\-*/^()]/u.test(sigil) || Array.from(sigil).length > MAX_SIGIL_LENGTH) {
 			return error('invalid-sigil', `Invalid group sigil "${rawSigil}".`, sourceOffset);
 		}
 		if (!groups.includes(sigil)) groups.push(sigil);
@@ -40,7 +44,7 @@ export function parseDeclaration(prefix: string, expressionSource: string, sourc
 
 	return {
 		kind: 'success',
-		declaration: { label, normalizedLabel: normalizeLabel(label), groups, expressionSource, sourceOffset },
+		declaration: { label, normalizedLabel, groups, expressionSource, sourceOffset },
 	};
 }
 

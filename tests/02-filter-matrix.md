@@ -12,6 +12,7 @@
 `=sum:ex` <!-- expect:value 330.00 -->
 `=count:ex` <!-- expect:value 4 -->
 `=avg:ex` <!-- expect:value 82.50 -->
+`=median:ex` <!-- expect:value 55.00 -->
 `=min:ex` <!-- expect:value 40.00 -->
 `=max:ex` <!-- expect:value 180.00 -->
 
@@ -39,5 +40,6 @@
 `=sum:ex{ob}{gr}` <!-- expect:value 0 -->
 `=count:ex{ob}{gr}` <!-- expect:value 0 -->
 `=avg:ex{ob}{gr}` <!-- expect:error empty-aggregate -->
+`=median:ex{ob}{gr}` <!-- expect:error empty-aggregate -->
 `=min:ex{ob}{gr}` <!-- expect:error empty-aggregate -->
 `=max:ex{ob}{gr}` <!-- expect:error empty-aggregate -->

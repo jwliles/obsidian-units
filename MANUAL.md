@@ -1,11 +1,10 @@
-# Obsidian Units Manual
+# Obsidian Quantities Manual
 
-Obsidian Units evaluates explicit calculations inside single-backtick inline code spans. It supports unit conversion, arithmetic, reusable variables, note-wide groups, and local accumulations. Calculations are evaluated from top to bottom within the current note.
+Obsidian Quantities evaluates explicit calculations inside single-backtick inline code spans. It supports unit conversion, arithmetic, reusable variables, note-wide groups, local accumulations, and positional regions. Calculations are evaluated from top to bottom within the current note.
 
 This manual describes the selected language behavior. The grouped-calculation
-evaluator is being aligned with [SEMANTICS.md](SEMANTICS.md); see
-[DESIGN_RECORD.md](DESIGN_RECORD.md) for rationale and
-[units/CHANGES_SUMMARY.md](units/CHANGES_SUMMARY.md) for remaining gaps.
+evaluator follows [SEMANTICS.md](SEMANTICS.md); see
+[DESIGN_RECORD.md](DESIGN_RECORD.md) for rationale.
 
 ## Quick start
 
@@ -29,7 +28,7 @@ The marker is intentional. Ordinary inline code such as `` `npm test` `` is neve
 
 ## Expression marker
 
-The expression marker identifies inline code owned by Obsidian Units. Its default value is `=`.
+The expression marker identifies inline code owned by Obsidian Quantities. Its default value is `=`.
 
 ```markdown
 `=2 + 2`
@@ -37,7 +36,7 @@ The expression marker identifies inline code owned by Obsidian Units. Its defaul
 Total = `=sum:ex`
 ```
 
-The marker is configurable in **Settings → Obsidian Units → Expression marker**. It is exact and case-sensitive. It may contain 1–16 characters, but cannot contain whitespace or backticks.
+The marker is configurable in **Settings → Obsidian Quantities → Expression marker**. It is exact and case-sensitive. It may contain 1–16 characters, but cannot contain whitespace or backticks.
 
 If the marker is changed to `~`, the same expressions become:
 
@@ -47,15 +46,15 @@ If the marker is changed to `~`, the same expressions become:
 Total = `~sum:ex`
 ```
 
-After a marker change, expressions using the old marker no longer calculate. Declarations still retain their declaration syntax, but they have no evaluated value until their inline expression uses the active marker. When Obsidian Units recognizes a declaration using the previous marker, it reports an incorrect-marker diagnostic instead of silently treating its value as zero.
+After a marker change, expressions using the old marker no longer calculate. Declarations still retain their declaration syntax, but they have no evaluated value until their inline expression uses the active marker. When Obsidian Quantities recognizes a declaration using the previous marker, it reports an incorrect-marker diagnostic instead of silently treating its value as zero.
 
-Use the command **Update Units markers in current file** to migrate recognized expressions in the active note from the previous marker to the active marker. The command updates declarations, aggregates, and conversions. It deliberately leaves ambiguous standalone arithmetic unchanged because another plugin may own it.
+Use the command **Update Quantities markers in current file** to migrate recognized expressions in the active note from the previous marker to the active marker. The command updates declarations, aggregates, and conversions. It deliberately leaves ambiguous standalone arithmetic unchanged because another plugin may own it.
 
 The previous marker is retained so the migration command can identify what to replace. If plugin settings are not synchronized across devices, notes using a customized marker may not be portable until the other device is configured the same way.
 
 ## Rendering
 
-Obsidian Units renders calculations in:
+Obsidian Quantities renders calculations in:
 
 - Live Preview
 - Reading View
@@ -64,9 +63,20 @@ Source mode always shows the Markdown source.
 
 In Live Preview, placing the cursor in a calculation reveals its source so it can be edited. Its rendered result and diagnostic are temporarily suppressed while the cursor intersects that code span.
 
+Reading View conceals non-prose calculation metadata: declaration sigils and
+valid regional `top` and `bottom` markers. For example,
+`Cost:expense:food = 20` is presented as `Cost = 20`. A structural marker
+carrying a warning or error is shown as that diagnostic rather than concealed.
+
+This cleanup is strictly presentational. It does not modify Markdown source,
+parsing, evaluation, or membership. Source Mode and Live Preview retain the
+complete declaration and structural syntax.
+If a concealed structural marker was the only content in its paragraph or list
+item, Reading View also removes that empty presentation container.
+
 Use **Toggle rendered calculations in active editor** to turn rendered calculations on or off for the active editor.
 
-Markdown headings, lists, blockquotes, emphasis, and other presentation structure do not define calculation scope. Calculations render the same way in plain text and heavily structured Markdown. Obsidian Units ignores expressions inside fenced code blocks and HTML comments.
+Markdown headings, lists, blockquotes, emphasis, and other presentation structure do not define calculation scope. Calculations render the same way in plain text and heavily structured Markdown. Obsidian Quantities ignores expressions inside fenced code blocks and HTML comments.
 
 ## Result display modes
 
@@ -187,12 +197,16 @@ Only successful declarations enter the variable environment. An error does not r
 
 ### Declaration boundaries
 
-Obsidian Units recognizes one declaration per line. A declaration can appear as the line's main content or in the final ledger-style field after the last pipe. Common list markers are ignored when locating the label.
+Obsidian Quantities recognizes one declaration per line. A declaration can appear as the line's main content or in the final ledger-style field after the last pipe. Common list markers are ignored when locating the label.
 
 ```markdown
 - CAC = `=135.00`
 | 2026-08-05 | CAC = `=135.00` |
 ```
+
+Pipe-delimited ledger lines are supported. Formal Markdown tables are not a
+supported declaration host. A table row may happen to resemble a ledger line,
+but table-specific parsing, escaping, and rendering behavior is unspecified.
 
 The inline calculation associated with the declaration must be the declaration value, not unrelated inline code elsewhere on the line.
 
@@ -232,7 +246,10 @@ one record indexed by both `cac` and `ex`; membership does not copy its value.
 If implicit and explicit memberships overlap, aggregates deduplicate by
 declaration identity. `CAC:cac:ex` is valid but normally unnecessary.
 
-Sigils are case-insensitive and Unicode-normalized. They cannot contain whitespace or the structural characters used by the grammar. Duplicate sigils on one declaration are counted only once.
+Sigils are case-insensitive and Unicode-normalized. They cannot contain
+whitespace, arithmetic operators, parentheses, or the structural characters
+used by the grammar. Duplicate sigils on one declaration are counted only
+once.
 
 ## Local accumulations
 
@@ -240,24 +257,24 @@ Each history or group also has a current local accumulation. A declaration
 joins the active local accumulation for every history and sigil to which it
 belongs, opening one when necessary.
 
-A double-colon aggregate reads and then closes the queried local accumulation:
+An `@` aggregate reads and then closes the queried local accumulation:
 
 ```markdown
 Rent:ex = `=800.00`
 Power:ex = `=150.00`
 Water:ex = `=60.00`
-First period = `=sum::ex`
+First period = `=sum@ex`
 
 Groceries:ex = `=200.00`
 Fuel:ex = `=90.00`
-Second period = `=sum::ex`
+Second period = `=sum@ex`
 ```
 
 `First period` is 1010.00. Its aggregate closes local `ex` after evaluating.
 `Groceries` opens a fresh local `ex`, so `Second period` is 290.00. A global
 `sum:ex` after both periods is 1300.00.
 
-Closure is selective. `sum::ex` closes only `ex`; other local histories and
+Closure is selective. `sum@ex` closes only `ex`; other local histories and
 groups remain active. Filters affect the returned selection but still close
 the queried accumulation as a whole. Bare declarations and unrelated labels
 do not close anything merely by appearing.
@@ -271,6 +288,45 @@ set. If no matching accumulation has ever existed, the evaluator reports an
 unknown-local-group error. Older closed accumulations are not addressable by
 index or name.
 
+## Regional aggregation
+
+Use exact standalone `top` and `bottom` expressions to delimit a positional
+region:
+
+```markdown
+`=top`
+
+A = `=10`
+B = `=20`
+Running = `=sum:>`
+
+`=bottom`
+
+Final = `=sum:>`
+```
+
+Regional reads do not close the region. While a region is active, `sum:>` reads
+its successful declarations. After `bottom`, it rereads the latest completed
+region. A read before any region exists is an error.
+
+`top` while a region is active and `bottom` while none is active are errors.
+An active region at end of file produces a warning. Both keywords are
+case-insensitive and reserved as normalized labels, sigils, variable names,
+aggregate targets, and filter terms; multiword names such as `Top Amount`
+remain valid.
+
+Every aggregate function and filter works with `:>`:
+
+```markdown
+`=median:>`
+`=sum:>{food,fuel}{!paid}`
+```
+
+Declarations whose own expressions contain aggregates remain regional members
+but are omitted from regional aggregate selection. This prevents direct
+subtotals from being counted again. There is currently no syntax to widen the
+selection and include them.
+
 ## Aggregate functions
 
 The supported aggregate functions are:
@@ -278,23 +334,26 @@ The supported aggregate functions are:
 - `sum`
 - `count`
 - `avg`
+- `median`
 - `min`
 - `max`
 
-Use one colon for a global group and two colons for a local accumulation:
+Use one colon for a global group and `@` for a local accumulation:
 
 ```markdown
 `=sum:ex`
 `=count:ex`
 `=avg:ex`
+`=median:ex`
 `=min:ex`
 `=max:ex`
 
-`=sum::cac`
-`=count::cac`
-`=avg::cac`
-`=min::cac`
-`=max::cac`
+`=sum@cac`
+`=count@cac`
+`=avg@cac`
+`=median@cac`
+`=min@cac`
+`=max@cac`
 ```
 
 Aggregates use only successful preceding declarations. An unknown base group or local accumulation is an error rather than zero.
@@ -303,9 +362,20 @@ For a known group with no members remaining after filtering:
 
 - `sum` returns 0.
 - `count` returns 0.
-- `avg`, `min`, and `max` report an empty-aggregate error.
+- `avg`, `median`, `min`, and `max` report an empty-aggregate error.
 
 Only dimensionless numeric declarations can be aggregated. Unit-bearing quantities are rejected as aggregate members.
+
+Aggregates can appear inside ordinary arithmetic, and whitespace around the
+operator is optional:
+
+```markdown
+Projected = `=sum:ex+10`
+Remaining = `=Budget-sum:ex`
+```
+
+Arithmetic operators terminate the preceding aggregate target and therefore
+cannot appear in sigil or aggregate-target names.
 
 An aggregate result may be assigned to an unqualified label and reused as a variable:
 
@@ -351,7 +421,7 @@ Examples:
 
 ```markdown
 `=sum:ex{food,fuel}{!reimbursed}`
-`=count::cac{card,cash}`
+`=count@cac{card,cash}`
 ```
 
 The base group must exist. A filter sigil does not need a separate declaration; it can simply match no members.
@@ -392,7 +462,7 @@ Converts the selection or current-line conversion and replaces it with only the 
 
 Temporarily toggles rendered calculations for the active editor.
 
-### Update Units markers in current file
+### Update Quantities markers in current file
 
 Migrates recognized expressions in the active note from the stored previous marker to the current marker. A confirmation describes the affected file and marker change. Ambiguous standalone arithmetic is not rewritten.
 
@@ -406,7 +476,7 @@ Sets the maximum displayed decimal places from 0 through 10. Default: 4.
 
 ### Expression marker
 
-Sets the exact prefix that claims an inline code expression for Obsidian Units. Default: `=`.
+Sets the exact prefix that claims an inline code expression for Obsidian Quantities. Default: `=`.
 
 ### Render in Live Preview
 
@@ -467,7 +537,7 @@ Use common full names or abbreviations in expressions. The unit display setting 
 
 ## Diagnostics and troubleshooting
 
-Obsidian Units reports calculation errors at the expression rather than silently substituting zero. Diagnostics include:
+Obsidian Quantities reports calculation errors at the expression rather than silently substituting zero. Diagnostics include:
 
 - unknown or malformed units
 - incompatible conversions
@@ -481,7 +551,7 @@ Obsidian Units reports calculation errors at the expression rather than silently
 - unknown global groups
 - unknown local accumulations
 - invalid or mixed filter clauses
-- empty `avg`, `min`, or `max`
+- empty `avg`, `median`, `min`, or `max`
 - attempts to aggregate unit-bearing values
 - attempts to attach aggregate results to groups
 
@@ -499,9 +569,9 @@ If a marked expression is visible rather than rendered in Live Preview, move the
 
 ## Compatibility with Dataview and other plugins
 
-The default `` `=` `` syntax can overlap with plugins that claim the same inline-code prefix. Set a different expression marker to give Obsidian Units a distinct namespace, then run **Update Units markers in current file** for each note you want to migrate.
+The default `` `=` `` syntax can overlap with plugins that claim the same inline-code prefix. Set a different expression marker to give Obsidian Quantities a distinct namespace, then run **Update Quantities markers in current file** for each note you want to migrate.
 
-Obsidian Units treats its configured marker as authoritative. After changing it, old-marker expressions do not continue calculating. This avoids having two active syntaxes with ambiguous ownership.
+Obsidian Quantities treats its configured marker as authoritative. After changing it, old-marker expressions do not continue calculating. This avoids having two active syntaxes with ambiguous ownership.
 
 Ordinary inline code and ambiguous old-marker arithmetic are left alone. Compatibility ultimately depends on the other plugin's own parsing and rendering rules.
 
@@ -517,7 +587,10 @@ Variable declaration    Name = `=expression`
 Variable reference      `=Name * 2`
 Qualified declaration   Name:group:other = `=expression`
 Global aggregate        `=sum:group`
-Local aggregate         `=sum::group`
+Local aggregate         `=sum@group`
+Regional top marker     `=top`
+Regional bottom marker  `=bottom`
+Regional aggregate      `=sum:>`
 Positive filter         `=sum:group{a,b}`
 Negative filter         `=sum:group{!a,!b}`
 Combined filters        `=sum:group{a,b}{!c}`
@@ -532,7 +605,8 @@ Display mode            `=5 ft to cm | value`
 - Aggregation is limited to dimensionless numeric values.
 - Recursive or order-sensitive aggregate membership is unsupported.
 - Local accumulations expose only the active or most recently closed accumulation.
-- A double-colon aggregate closes its queried local accumulation after evaluation.
+- A successful `@` aggregate closes its queried local accumulation after evaluation.
+- Regional reads expose only the active or latest completed region.
 - Headings and other Markdown structure have no semantic role.
 - The marker migration command works on the active file, not the entire vault.
 - Plugin settings, including a customized marker, must be synchronized separately from note content.

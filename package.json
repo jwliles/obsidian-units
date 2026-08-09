@@ -1,7 +1,7 @@
 {
-	"name": "obsidian-units",
-	"version": "1.0.0",
-	"description": "Soulver-style inline unit conversions for Obsidian.",
+	"name": "obsidian-quantities",
+	"version": "0.5.0",
+	"description": "Calculate with quantities, variables, units, and scoped aggregates directly in your notes.",
 	"main": "main.js",
 	"scripts": {
 		"dev": "node esbuild.config.mjs",
@@ -11,6 +11,10 @@
 	},
 	"keywords": [
 		"obsidian",
+		"quantities",
+		"calculator",
+		"arithmetic",
+		"aggregation",
 		"units",
 		"conversion",
 		"soulver"

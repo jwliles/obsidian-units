@@ -47,13 +47,20 @@ shape and caused confirmed cross-period bleed.
 The selected rule gives punctuation an operational meaning:
 
 - `function:group` reads note-wide preceding history and does not mutate scope.
-- `function::group` reads the active local accumulation and closes that group
+- `function@group` reads the active local accumulation and closes that group
   after evaluation.
 - The next matching declaration opens a fresh local accumulation.
+- Exact `top` and `bottom` expressions delimit positional regions.
+- `function:>` reads the active or latest completed region without closing it.
 
 Closure belongs to the aggregate expression, not to the label `Total` and not
 to Markdown headings. An unrelated bare declaration cannot accidentally close
 active groups. Filters change selection but do not change what is closed.
+
+Regional structure is separately balanced because position itself is
+membership. Aggregate-containing declarations remain regional members but are
+excluded from regional aggregate selection to avoid subtotal duplication.
+`top` and `bottom` are reserved after identifier normalization.
 
 ## Filters
 
@@ -66,7 +73,7 @@ sum:ex{!ob,!ls} = ex AND NOT (ob OR ls)
 
 Mixed-polarity clauses are errors. Positive and negative counterparts partition
 the base group. Empty filtered selections return zero for `sum` and `count` and
-error for `avg`, `min`, and `max`.
+error for `avg`, `median`, `min`, and `max`.
 
 ## Evaluation and errors
 
@@ -85,14 +92,46 @@ being resolved.
 
 ## Markdown and rendering
 
-Headings, lists, tables, blockquotes, and blank lines are presentation only.
-Fenced code blocks and HTML comments are excluded from scanning. Live Preview
-and Reading View share the same document evaluation model.
+Headings, lists, blockquotes, and blank lines are presentation only. Fenced
+code blocks and HTML comments are excluded from scanning. Pipe-separated
+ledger fields are deliberately supported because calculation-oriented notes
+often place dates or annotations beside declarations. Formal Markdown tables
+are not a supported host; incidental resemblance to ledger syntax is not a
+language guarantee.
+
+Live Preview and Reading View share the same document evaluation model. Reading
+View conceals declaration sigils and valid `top` and `bottom` markers because
+they carry calculation metadata rather than prose or values. This cleanup is
+strictly presentational: Source Mode and Live Preview retain complete syntax,
+the Markdown is never rewritten, and diagnostics remain visible.
+
+## Aggregate spelling and boundaries
+
+`avg` was retained instead of adding the synonymous `mean`. `median` addresses
+the useful case of a center value, including the mean of the two middle values
+for an even selection. `mode` remains deferred until a concrete scalar use case
+also establishes useful tie behavior.
+
+Named aggregate targets terminate at arithmetic operators even without
+whitespace. Compact calculator expressions such as `sum:ex+10` are therefore
+natural and unambiguous; the corresponding tradeoff is that arithmetic
+operators and parentheses are unavailable in membership names.
+
+An evaluated declaration explicitly records whether its own parsed expression
+contains an aggregate. Regional reads can then exclude aggregate-containing
+declarations without dependency or provenance analysis. Merely referencing a
+previous aggregate result does not set this flag.
 
 ## Deferred work
 
 - Calculation traces showing variable provenance and aggregate membership.
 - A canonical sigil grammar table shared by parser and documentation.
 - Fixture-level marker configuration or a permanently default-marker corpus.
-- Decisions for aggregating unit-bearing quantities and aggregate-derived
+- Decisions for aggregating unit-bearing quantities and aggregate-containing
   declaration histories beyond the existing recursion safety rule.
+- Syntax and semantics for deliberately including aggregate-containing
+  declarations in regional reads.
+- Named or indexed access to historical regions beyond assigning a regional
+  aggregate result to a normal variable or membership.
+- A `mode` aggregate, unless a use case establishes its tie semantics.
+- Currency as either presentation or a semantic value type.

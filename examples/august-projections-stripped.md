@@ -15,7 +15,7 @@ id:
 
 Regression note derived from `august-projections.md` with every manual period
 letter (`:a` through `:d`) removed. Under the selected semantics, each
-`sum::ex` reads and closes that period's local expense accumulation. The four
+`sum@ex` reads and closes that period's local expense accumulation. The four
 period totals must be 489.79, 453.36, 138.62, and 134.46. The final global
 `sum:ex` is 1216.23, while the final local read repeats the most recently
 closed period, 134.46.
@@ -34,7 +34,7 @@ EXPENSES:
 - OG&E:ex = `=83.30` | Electricity Bill
 - Progressive:ex = `=143.50` | Vehicle Insurance.
 - Spotify:ex = `=12.99`
-- Total = `=sum::ex`
+- Total = `=sum@ex`
 
 BALANCES:
 - Starting = `=Balance+Amount`
@@ -51,7 +51,7 @@ EXPENSES:
 - City Bill:ex = `=86` | This is for water, sewer, trash, and other municipal services.
 - Reach:rf:ex = `=138.62` | Bi-weekly payment
 - Vyve:vy:ex = `=123.84` | Broadband Service.
-- Total = `=sum::ex`
+- Total = `=sum@ex`
 
 BALANCES:
 - Starting = `=Amount+Ending`
@@ -65,7 +65,7 @@ PAY:
 
 EXPENSES:
 - Reach:rf:ex = `=138.62` | Bi-weekly payment
-- Total = `=sum::ex`
+- Total = `=sum@ex`
 
 BALANCES:
 - Starting = `=Amount+Ending`
@@ -80,7 +80,7 @@ PAY:
 EXPENSES:
 - Proton:ex = `=12.99`
 - Vyve:vy:ex = `=121.47`
-- Total = `=sum::ex`
+- Total = `=sum@ex`
 
 BALANCES:
 - Starting = `=Amount+Ending`
@@ -91,7 +91,7 @@ CAC Total = `=sum:CAC`
 Reach Total = `=sum:rf`
 Latest CAC = `=CAC`
 Expenses (global, all periods) = `=sum:ex`
-Expenses (local, last read) = `=sum::ex`
+Expenses (local, last read) = `=sum@ex`
 
 Expected values:
 

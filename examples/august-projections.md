@@ -30,7 +30,7 @@ EXPENSES:
 - OG&E:ex:a = `=83.30` | Electricity Bill
 - Progressive:ex:a = `=143.50` | Vehicle Insurance.
 - Spotify:ex:a = `=12.99`
-- Total = `=sum::ex{a}`
+- Total = `=sum@ex{a}`
 
 BALANCES:
 - Starting = `=Balance+Amount`
@@ -47,7 +47,7 @@ EXPENSES:
 - City Bill:ex:b = `=86` | This is for water, sewer, trash, and other municipal services.
 - Reach:rf:ex:b = `=138.62` | Bi-weekly payment - This leaves 48 payments. Moved from 2026-08-05 make space for Progressive. Progressive no longer has a flexible due date. It will be paid on time each month.
 - Vyve:vy:ex:b = `=123.84` | Broadband Service. This leaves 121.47 unpaid.
-- Total = `=sum::ex{b}`
+- Total = `=sum@ex{b}`
 
 BALANCES:
 - Starting = `=Amount+Ending`

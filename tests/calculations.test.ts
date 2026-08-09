@@ -4,6 +4,7 @@ import { parseDeclaration } from '../src/calculations/declarations';
 import { parseExpression } from '../src/calculations/expression-parser';
 import { evaluateDocument } from '../src/document/evaluation-index';
 import { scanInlineCode } from '../src/document/scanner';
+import { concealDeclarationSigils, shouldConcealStructuralMarkerInReadingView } from '../main';
 
 const options = { formatNumber: (value: number) => String(value) };
 
@@ -37,14 +38,17 @@ assert.equal(parseDeclaration('first = `=1` second = ', '2', 0).kind, 'error');
 
 // Aggregate grammar.
 assert.equal(parseAggregate('sum:ex{ob,ls}{!late}').kind, 'success');
-const localAggregate = parseAggregate('sum::CAC{!late}');
+assert.equal(parseAggregate('median:ex').kind, 'success');
+assert.equal(parseAggregate('sum:>').kind, 'success');
+assert.equal(parseAggregate('sum::ex').kind, 'error');
+const localAggregate = parseAggregate('sum@CAC{!late}');
 assert.equal(localAggregate.kind, 'success');
 if (localAggregate.kind === 'success') {
 	assert.equal(localAggregate.node.scope, 'local');
 	assert.equal(localAggregate.node.group, 'cac');
 	assert.equal(localAggregate.node.groupSource, 'CAC');
 }
-const localAst = parseExpression('sum::ex{gr}');
+const localAst = parseExpression('sum@ex{gr}');
 assert.equal(localAst.kind, 'success');
 if (localAst.kind === 'success') {
 	assert.equal(localAst.node.kind, 'aggregate');
@@ -53,6 +57,18 @@ if (localAst.kind === 'success') {
 const scalarAst = parseExpression('CAC * 2');
 assert.equal(scalarAst.kind, 'success');
 if (scalarAst.kind === 'success') assert.equal(scalarAst.node.kind, 'scalar');
+const aggregateContainingAst = parseExpression('sum:ex + 10');
+assert.equal(aggregateContainingAst.kind, 'success');
+if (aggregateContainingAst.kind === 'success' && aggregateContainingAst.node.kind === 'scalar') {
+	assert.equal(aggregateContainingAst.node.aggregates.length, 1);
+}
+const compactAggregateContainingAst = parseExpression('sum:ex+10');
+assert.equal(compactAggregateContainingAst.kind, 'success');
+if (compactAggregateContainingAst.kind === 'success' && compactAggregateContainingAst.node.kind === 'scalar') {
+	assert.equal(compactAggregateContainingAst.node.aggregates.length, 1);
+	assert.equal(compactAggregateContainingAst.node.aggregates[0].node.group, 'ex');
+}
+assert.equal(parseDeclaration('Cost:bad-name = ', '10', 0).kind, 'error');
 assert.equal(parseAggregate('sum:ex{ob,!late}').kind, 'error');
 const mixedFilter = parseAggregate('sum:ex{ob,!late}');
 if (mixedFilter.kind === 'error') assert.match(mixedFilter.message, /separate clauses/);
@@ -72,6 +88,8 @@ const repeated = [
 ].join('\n');
 assert.equal(successValue(repeated, 2), 25);
 assert.equal(successValue(repeated, 3), 85);
+assert.equal(successValue('A:ex = `=10`\nB = `=sum:ex+5`', 1), 15);
+assert.equal(successValue('Budget = `=20`\nA:ex = `=7`\nB = `=Budget-sum:ex`', 2), 13);
 
 // Positive and negated filters partition the base group.
 const income = [
@@ -97,7 +115,7 @@ assert.equal(successValue(filters, 3), 30);
 assert.equal(successValue(filters, 4), 10);
 
 // Empty identities/errors, forward scope, suggestions, and aggregate group rejection.
-for (const fn of ['sum', 'count', 'avg', 'min', 'max']) {
+for (const fn of ['sum', 'count', 'avg', 'median', 'min', 'max']) {
 	const unknownGroup = outcomes(`\`=${fn}:none\``)[0];
 	assert.equal(unknownGroup.kind, 'error');
 	if (unknownGroup.kind === 'error') assert.equal(unknownGroup.diagnostic.code, 'unknown-group');
@@ -105,7 +123,7 @@ for (const fn of ['sum', 'count', 'avg', 'min', 'max']) {
 const emptyFiltered = outcomes('item:known = `=1`\n`=sum:known{missing}`\n`=count:known{missing}`');
 assert.equal(emptyFiltered[1].kind === 'success' ? emptyFiltered[1].display : '', '0');
 assert.equal(emptyFiltered[2].kind === 'success' ? emptyFiltered[2].display : '', '0');
-for (const fn of ['avg', 'min', 'max']) assert.equal(outcomes(`item:known = \`=1\`\n\`=${fn}:known{missing}\``)[1].kind, 'error');
+for (const fn of ['avg', 'median', 'min', 'max']) assert.equal(outcomes(`item:known = \`=1\`\n\`=${fn}:known{missing}\``)[1].kind, 'error');
 const typo = outcomes('CPI = `=330.30`\nratio = `=CIP / 299.97`')[1];
 assert.equal(typo.kind, 'error');
 if (typo.kind === 'error') {
@@ -152,7 +170,20 @@ assert.equal(customMarker[2].kind, 'success');
 
 assert.deepEqual(scanInlineCode('`=1`\n<!-- `=2` -->\n```md\n`=3`\n```\n`=4`').map((span) => span.content), ['=1', '=4']);
 
-const localFunctions = outcomes('A:g = `=1.00`\nB:g = `=3.00`\n`=avg::g`\n`=min::g`\n`=max::g`');
+const structuralDocument = evaluateDocument('`=Top`\nA = `=2`\n`=BOTTOM`\n`=sum:>`', options);
+assert.deepEqual(structuralDocument.structures().map((entry) => entry.node.kind), ['region-top', 'region-bottom']);
+const structuralResult = structuralDocument.entries()[3].outcome;
+assert.equal(structuralResult.kind === 'success' ? structuralResult.value.value : NaN, 2);
+assert.equal(evaluateDocument('`=top`', options).diagnostics()[0]?.code, 'unclosed-region');
+assert.equal(shouldConcealStructuralMarkerInReadingView(true), true);
+assert.equal(shouldConcealStructuralMarkerInReadingView(true, { severity: 'warning' }), false);
+assert.equal(shouldConcealStructuralMarkerInReadingView(false), false);
+assert.equal(concealDeclarationSigils('Cost:ex:food = '), 'Cost = ');
+assert.equal(concealDeclarationSigils(' | Cost:ex:food = '), ' | Cost = ');
+assert.equal(concealDeclarationSigils('Cost = '), 'Cost = ');
+assert.equal(concealDeclarationSigils('Prose: remains visible'), 'Prose: remains visible');
+
+const localFunctions = outcomes('A:g = `=1.00`\nB:g = `=3.00`\n`=avg@g`\n`=min@g`\n`=max@g`');
 assert.equal(localFunctions[2].kind === 'success' ? localFunctions[2].value.value : NaN, 2);
 assert.equal(localFunctions[3].kind === 'success' ? localFunctions[3].value.value : NaN, 1);
 assert.equal(localFunctions[4].kind === 'success' ? localFunctions[4].value.value : NaN, 3);

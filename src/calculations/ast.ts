@@ -1,9 +1,9 @@
-import { AggregateFilter, AggregateFunction } from './aggregate';
+import { AggregateFilter, AggregateFunction, AggregateOccurrence, AggregateScope } from './aggregate';
 
 export interface AggregateExpressionNode {
 	kind: 'aggregate';
 	function: AggregateFunction;
-	scope: 'global' | 'local';
+	scope: AggregateScope;
 	group: string;
 	groupSource: string;
 	filters: AggregateFilter[];
@@ -16,7 +16,10 @@ export interface AggregateExpressionNode {
 export interface ScalarExpressionNode {
 	kind: 'scalar';
 	source: string;
+	aggregates: AggregateOccurrence[];
 }
+
+export type StructuralNode = { kind: 'region-top' } | { kind: 'region-bottom' };
 
 export type ExpressionNode = AggregateExpressionNode | ScalarExpressionNode;
 
