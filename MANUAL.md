@@ -290,7 +290,7 @@ index or name.
 
 ## Regional aggregation
 
-Use exact standalone `top` and `bottom` expressions to delimit a positional
+Use `top`, optionally with a unique name, and `bottom` to delimit a positional
 region:
 
 ```markdown
@@ -303,6 +303,12 @@ Running = `=sum:>`
 `=bottom`
 
 Final = `=sum:>`
+
+`=top:pay 1`
+Pay = `=40`
+`=bottom`
+
+Pay 1 total = `=sum:>pay 1`
 ```
 
 Regional reads do not close the region. While a region is active, `sum:>` reads
@@ -314,6 +320,12 @@ An active region at end of file produces a warning. Both keywords are
 case-insensitive and reserved as normalized labels, sigils, variable names,
 aggregate targets, and filter terms; multiword names such as `Top Amount`
 remain valid.
+
+A name becomes readable only after its region closes. It is normalized in its
+own namespace and may therefore match an ordinary variable or sigil. Region
+names cannot be reused. Forward reads and named reads while that region is
+still active are errors; use plain `:>` for the active region. Filters on a
+named read select memberships within that completed region.
 
 Every aggregate function and filter works with `:>`:
 
@@ -327,6 +339,26 @@ but are omitted from regional aggregate selection. This prevents direct
 subtotals from being counted again. There is currently no syntax to widen the
 selection and include them.
 
+Use square brackets to collect first-level aggregate results already declared
+inside the active or latest completed region:
+
+```markdown
+`=top`
+DoorDash Total = `=sum:doordash`
+Nayax Total = `=sum:nayax`
+OpenAI Total = `=sum:openai`
+`=bottom`
+
+Discretionary = `=sum:>[]`
+```
+
+The outer function selects only declarations whose entire expression is the
+same ordinary aggregate function. Thus `sum:>[]` selects pure `sum` results,
+while `sum:x + 10`, a variable reference, a pure `avg`, and an earlier
+`sum:>[]` result are excluded. All six numeric functions support this form.
+Filters such as `sum:>[]{approved}` inspect the subtotal declarations rather
+than the declarations consumed by their inner sums. `list:>[]` is not defined.
+
 ## Aggregate functions
 
 The supported aggregate functions are:
@@ -337,6 +369,7 @@ The supported aggregate functions are:
 - `median`
 - `min`
 - `max`
+- `list`
 
 Use one colon for a global group and `@` for a local accumulation:
 
@@ -362,9 +395,24 @@ For a known group with no members remaining after filtering:
 
 - `sum` returns 0.
 - `count` returns 0.
+- `list` returns an empty string.
 - `avg`, `median`, `min`, and `max` report an empty-aggregate error.
 
-Only dimensionless numeric declarations can be aggregated. Unit-bearing quantities are rejected as aggregate members.
+Only dimensionless numeric declarations can be used by numeric aggregates. Unit-bearing quantities and text values are rejected as numeric aggregate members.
+
+`list` is the exception: it returns selected declaration labels in document
+order, joined with a comma and space, and does not inspect their values:
+
+```markdown
+DoorDash:ss = `=30.47`
+OpenAI:ss = `=7.04`
+Contributors = `=list:ss` <!-- DoorDash, OpenAI -->
+```
+
+It supports global (`list:ss`), local (`list@ss`), and regional (`list:>`)
+selection plus ordinary filters. A known empty selection returns an empty
+string. A list result may be assigned and directly displayed through its
+variable; using text in arithmetic or a numeric aggregate is an error.
 
 Aggregates can appear inside ordinary arithmetic, and whitespace around the
 operator is optional:
@@ -430,9 +478,9 @@ The base group must exist. A filter sigil does not need a separate declaration; 
 
 The note is evaluated in document order. Each expression can see only successful declarations and group entries above it. Reading View and Live Preview share the same document-level evaluation model.
 
-Numeric literals retain their written decimal scale where possible. Variables preserve their scale. Arithmetic and aggregate output preserve useful input scale up to the configured decimal precision. `count` is always an integer.
+Numeric literals retain their written decimal scale where possible. Variables preserve their scale. Arithmetic and aggregate output preserve useful input scale up to the configured decimal precision. A finite non-zero result is never rendered as zero: when the configured precision would show only zeros, Quantities extends the display just far enough to reveal the first significant digit. `count` is always an integer.
 
-Change the maximum displayed decimal places with **Decimal precision** in plugin settings. The allowed range is 0–10 and the default is 4. Trailing zero behavior is influenced by the source values and operation rather than every result being forced to a fixed width.
+Change the normal maximum displayed decimal places with **Decimal precision** in plugin settings. The allowed range is 0–10 and the default is 4. The non-zero safety rule may extend a result beyond that limit. Trailing zero behavior is influenced by the source values and operation rather than every result being forced to a fixed width.
 
 ## Commands
 
@@ -472,7 +520,7 @@ The calculator ribbon icon runs the current-line unit conversion action.
 
 ### Decimal precision
 
-Sets the maximum displayed decimal places from 0 through 10. Default: 4.
+Sets the normal maximum displayed decimal places from 0 through 10. Default: 4. Quantities may exceed this limit when necessary to prevent a non-zero value from appearing to be zero.
 
 ### Expression marker
 
@@ -625,4 +673,6 @@ npm run build
 
 The build produces the Obsidian plugin bundle. See
 [SEMANTICS.md](SEMANTICS.md) for normative language rules and
-[DESIGN_RECORD.md](DESIGN_RECORD.md) for their rationale.
+[DESIGN_RECORD.md](DESIGN_RECORD.md) for their rationale. Unimplemented ideas
+live in [FUTURE_IDEAS.md](FUTURE_IDEAS.md), while confirmed implementation
+problems are tracked in [DEFECTS.md](DEFECTS.md).

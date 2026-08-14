@@ -148,6 +148,8 @@ zero or more filter clauses:
 FUNCTION :  TARGET {FILTER...}  global
 FUNCTION @  TARGET {FILTER...}  local
 FUNCTION :>        {FILTER...}  regional
+FUNCTION :> NAME   {FILTER...}  named completed region
+FUNCTION :> []     {FILTER...}  regional aggregate-result collection
 ```
 
 Function names are case-insensitive. The supported functions are:
@@ -159,15 +161,17 @@ Function names are case-insensitive. The supported functions are:
   middle values for an even-sized selection;
 - `min`: minimum selected value;
 - `max`: maximum selected value.
+- `list`: selected declaration labels in document order, joined with `, `.
 
 A named aggregate target ends before `+`, `-`, `*`, `/`, or `^`, without a
 whitespace requirement. This permits aggregates inside compact scalar
 expressions such as `sum:ex+10`. Those operators and parentheses are therefore
 not valid membership-name characters.
 
-Only selected dimensionless numeric records can be aggregated. If the selected
-members include a unit-bearing quantity, aggregation fails. A quantity excluded
-by filters does not cause that error.
+Numeric functions accept only selected dimensionless numeric records. If their
+selection includes a unit-bearing quantity or text value, aggregation fails.
+`list` inspects labels rather than values, so numeric, quantity, and text
+declarations may all contribute.
 
 An unknown global membership target is an error. An aggregate appearing before
 the target's first successful record is therefore unknown rather than zero.
@@ -176,13 +180,15 @@ For a known target whose filters select no records:
 
 - `sum` returns `0`;
 - `count` returns `0`;
+- `list` returns an empty string;
 - `avg`, `median`, `min`, and `max` fail with an empty-selection error.
 
 `count` has integer scale. For `sum`, `avg`, `median`, `min`, and `max`, the greatest
 written decimal scale among selected numeric members becomes the result's
 minimum presentation scale. Additional digits required by the computed value
-remain visible up to configured display precision. Empty `sum` has integer
-scale.
+remain visible up to configured display precision. If that precision would
+render a finite non-zero result as zero, presentation extends just far enough
+to expose the first significant digit. Empty `sum` has integer scale.
 
 ## Global aggregation
 
@@ -274,7 +280,8 @@ trace purposes. This does not retroactively change any evaluated result.
 
 ## Regional aggregation
 
-Exact standalone `top` and `bottom` expressions delimit positional regions:
+`top`, optionally followed by a unique name, and `bottom` delimit positional
+regions:
 
 ```markdown
 `=top`
@@ -283,6 +290,12 @@ B = `=20`
 `=bottom`
 
 Total = `=sum:>` <!-- 30 -->
+
+`=top:period 1`
+C = `=5`
+`=bottom`
+
+Named = `=sum:>period 1` <!-- 5 -->
 ```
 
 The keywords are case-insensitive after normalization and lowercase is
@@ -304,6 +317,12 @@ Markdown structure has no effect. A regional aggregate reads the active region,
 or the latest completed region when none is active. It never closes the region.
 If no region has existed, it reports `unknown-region`.
 
+A named region becomes addressable only after `bottom` closes it. Region names
+are normalized but occupy their own namespace, so they may match a variable or
+membership name. Names are unique within that namespace: duplicate names,
+forward reads, and reads of a still-active named region are errors. Braces on a
+named read filter declarations inside that one region.
+
 All aggregate functions and membership filters work with the `:>` target:
 
 ```markdown
@@ -316,6 +335,15 @@ expression contains an aggregate at any depth. It remains a regional member but
 is excluded from regional aggregate selection. There is currently no widening
 syntax. Ordinary derived expressions that merely reference aggregate results
 remain eligible.
+
+`FUNCTION:>[]` instead selects successful declarations in the active or latest
+completed region whose entire root expression is an ordinary aggregate using
+the same function. It combines those finished results rather than reopening
+their original member sets, ignores embedded or differently named aggregate
+functions, and excludes declarations produced by an earlier bracket collector.
+Filters inspect the selected result declarations' memberships. This form is
+available for `sum`, `count`, `avg`, `median`, `min`, and `max`; `list:>[]` is
+not defined.
 
 ## Filters
 

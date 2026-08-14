@@ -2,6 +2,7 @@ import { AggregateExpressionNode, ScalarExpressionNode, StructuralNode } from '.
 import { evaluateArithmetic } from '../calculations/arithmetic';
 import { parseDeclaration } from '../calculations/declarations';
 import { parseExpression } from '../calculations/expression-parser';
+import { normalizeLabel, normalizeSigil } from '../calculations/normalize';
 import { DocumentEvaluationIndex, EvaluatedDeclaration, EvaluatedValue, EvaluationContext, EvaluationDiagnostic, EvaluationOutcome, InlineSource } from '../calculations/types';
 import { scanInlineCode } from './scanner';
 
@@ -34,7 +35,7 @@ export function evaluateDocument(sourceText: string, options: DocumentEngineOpti
 		variableLabels: new Map(),
 		groups: new Map(),
 		local: { active: new Map(), completed: new Map(), nextOrdinal: new Map() },
-		regional: { nextOrdinal: 1 },
+		regional: { namedCompleted: new Map(), usedNames: new Set(), nextOrdinal: 1 },
 	};
 	const records: Array<{ source: InlineSource; outcome: EvaluationOutcome }> = [];
 	const structures: Array<{ source: InlineSource; node: StructuralNode }> = [];
@@ -144,7 +145,9 @@ export function evaluateDocument(sourceText: string, options: DocumentEngineOpti
 
 		if (inline.declaration) {
 			if (outcome.kind === 'success') {
-				const member = declare(inline.declaration, outcome.value, context, containsAggregate);
+				const rootAggregateFunction = parsedExpression.kind === 'success' && parsedExpression.node.kind === 'aggregate' ? parsedExpression.node.function : undefined;
+				const aggregateResultCollection = parsedExpression.kind === 'success' && parsedExpression.node.kind === 'aggregate' && parsedExpression.node.resultCollection;
+				const member = declare(inline.declaration, outcome.value, context, containsAggregate, rootAggregateFunction, aggregateResultCollection);
 				updateLocalAccumulations(member, context);
 				if (context.regional.active) context.regional.active.members.push(member);
 				unboundDeclarations.delete(inline.declaration.normalizedLabel);
@@ -182,6 +185,12 @@ export function evaluateDocument(sourceText: string, options: DocumentEngineOpti
 function parseStructural(source: string): StructuralNode | undefined {
 	const normalized = source.normalize('NFKC').trim().toLocaleLowerCase();
 	if (normalized === 'top') return { kind: 'region-top' };
+	const namedTop = source.trim().match(/^top\s*:\s*(.+)$/iu);
+	if (namedTop) {
+		const nameSource = namedTop[1].trim();
+		const name = normalizeRegionalName(nameSource);
+		if (name && !RESERVED_NAMES.has(name)) return { kind: 'region-top', name, nameSource };
+	}
 	if (normalized === 'bottom') return { kind: 'region-bottom' };
 	return undefined;
 }
@@ -189,14 +198,17 @@ function parseStructural(source: string): StructuralNode | undefined {
 function applyStructural(node: StructuralNode, context: EvaluationContext, offset: number): ErrorOutcome | undefined {
 	if (node.kind === 'region-top') {
 		if (context.regional.active) return diagnostic('region-already-open', 'A region is already active; close it with "bottom" before opening another.', offset);
+		if (node.name && context.regional.usedNames.has(node.name)) return diagnostic('duplicate-region-name', `Region "${node.nameSource}" has already been used.`, offset);
 		const ordinal = context.regional.nextOrdinal++;
-		context.regional.active = { id: `region:${ordinal}`, ordinal, status: 'active', members: [], openedAt: offset };
+		context.regional.active = { id: `region:${ordinal}`, ordinal, status: 'active', members: [], openedAt: offset, name: node.name, nameSource: node.nameSource };
+		if (node.name) context.regional.usedNames.add(node.name);
 		return undefined;
 	}
 	if (!context.regional.active) return diagnostic('region-not-open', 'No region is active.', offset);
 	context.regional.active.status = 'completed';
 	context.regional.active.closedAt = offset;
 	context.regional.latestCompleted = context.regional.active;
+	if (context.regional.active.name) context.regional.namedCompleted.set(context.regional.active.name, context.regional.active);
 	context.regional.active = undefined;
 	return undefined;
 }
@@ -207,8 +219,9 @@ function evaluateScalar(node: ScalarExpressionNode, context: EvaluationContext, 
 	const localGroups: string[] = [];
 	for (let index = node.aggregates.length - 1; index >= 0; index--) {
 		const occurrence = node.aggregates[index];
-		const aggregate = evaluateAggregate({ kind: 'aggregate', function: occurrence.node.fn, scope: occurrence.node.scope, group: occurrence.node.group, groupSource: occurrence.node.groupSource, filters: occurrence.node.filters }, context, options, offset);
+		const aggregate = evaluateAggregate({ kind: 'aggregate', function: occurrence.node.fn, scope: occurrence.node.scope, group: occurrence.node.group, groupSource: occurrence.node.groupSource, filters: occurrence.node.filters, resultCollection: occurrence.node.resultCollection }, context, options, offset);
 		if (aggregate.kind !== 'success') return { outcome: aggregate, localGroups: [] };
+		if (aggregate.value.kind === 'text') return { outcome: diagnostic('text-arithmetic', 'A list result cannot be embedded in arithmetic.', offset), localGroups: [] };
 		const placeholder = `__quantitiesaggregate${index}`;
 		variables.set(placeholder, aggregate.value);
 		source = `${source.slice(0, occurrence.from)}${placeholder}${source.slice(occurrence.to)}`;
@@ -216,10 +229,14 @@ function evaluateScalar(node: ScalarExpressionNode, context: EvaluationContext, 
 	}
 
 	if (!node.aggregates.length) {
+		const directValue = context.variables.get(normalizeLabel(source.trim()));
+		if (directValue?.kind === 'text') return { outcome: { kind: 'success', value: directValue, display: directValue.value }, localGroups };
 		const compatibility = options.evaluateCompatibility?.(source, variables);
 		if (compatibility?.kind === 'success') return { outcome: { kind: 'success', value: compatibility.value, display: compatibility.display, consumeTrailingS: compatibility.consumeTrailingS }, localGroups };
 		if (compatibility?.kind === 'error') return { outcome: diagnostic(compatibility.code, compatibility.message, offset), localGroups: [] };
 	}
+	const referencedText = Array.from(context.variables.entries()).find(([name, value]) => value.kind === 'text' && referencesLabel(source, name));
+	if (referencedText) return { outcome: diagnostic('text-arithmetic', `Text variable "${context.variableLabels.get(referencedText[0]) ?? referencedText[0]}" cannot be used in arithmetic.`, offset), localGroups: [] };
 	const arithmetic = evaluateArithmetic(source.replace(/\s*=\s*$/, ''), variables, context.variableLabels);
 	if (arithmetic.kind === 'error') return { outcome: diagnostic(arithmetic.code, arithmetic.message, offset), localGroups: [] };
 	return {
@@ -251,7 +268,7 @@ function referencesLabel(expression: string, normalizedLabel: string): boolean {
 		.test(expression.normalize('NFKC').toLocaleLowerCase());
 }
 
-function declare(declaration: NonNullable<InlineSource['declaration']>, value: EvaluatedValue, context: EvaluationContext, containsAggregate: boolean): EvaluatedDeclaration {
+function declare(declaration: NonNullable<InlineSource['declaration']>, value: EvaluatedValue, context: EvaluationContext, containsAggregate: boolean, rootAggregateFunction?: AggregateExpressionNode['function'], aggregateResultCollection = false): EvaluatedDeclaration {
 	const declarationId = `declaration@${declaration.sourceOffset}`;
 	const provenance = {
 		declarationIds: Array.from(new Set([...(value.provenance?.declarationIds ?? []), declarationId])),
@@ -270,6 +287,8 @@ function declare(declaration: NonNullable<InlineSource['declaration']>, value: E
 		groups: memberships,
 		localAccumulationIds: [],
 		containsAggregate,
+		rootAggregateFunction,
+		aggregateResultCollection,
 		sourceOffset: declaration.sourceOffset,
 	};
 	for (const group of memberships) {
@@ -314,9 +333,21 @@ function completeAllLocalAccumulations(context: EvaluationContext, offset: numbe
 
 function evaluateAggregate(node: AggregateExpressionNode, context: EvaluationContext, options: DocumentEngineOptions, offset: number): EvaluationOutcome {
 	if (node.scope === 'regional') {
-		const region = context.regional.active ?? context.regional.latestCompleted;
-		if (!region) return diagnostic('unknown-region', 'No active or completed region is available.', offset);
-		return aggregateMembers(node, region.members.filter((member) => !member.containsAggregate), options, offset);
+		let region;
+		if (node.group) {
+			region = context.regional.namedCompleted.get(node.group);
+			if (!region) {
+				if (context.regional.active?.name === node.group) return diagnostic('region-not-completed', `Region "${node.groupSource}" is still active; use ":>" until it is closed.`, offset);
+				return diagnostic('unknown-region', `Unknown completed region "${node.groupSource}".`, offset);
+			}
+		} else {
+			region = context.regional.active ?? context.regional.latestCompleted;
+			if (!region) return diagnostic('unknown-region', 'No active or completed region is available.', offset);
+		}
+		const candidates = node.resultCollection
+			? region.members.filter((member) => member.rootAggregateFunction === node.function && !member.aggregateResultCollection)
+			: region.members.filter((member) => !member.containsAggregate);
+		return aggregateMembers(node, candidates, options, offset);
 	}
 	if (node.scope === 'local') {
 		const active = context.local.active.get(node.group);
@@ -335,9 +366,15 @@ function aggregateMembers(node: AggregateExpressionNode, initialMembers: Evaluat
 		const matches = filter.sigils.some((sigil) => member.groups.includes(sigil));
 		return filter.negated ? !matches : matches;
 	}));
+	if (node.function === 'list') {
+		const value = members.map((member) => member.label).join(', ');
+		return { kind: 'success', value: { kind: 'text', value, provenance: memberProvenance(members, node) }, display: value };
+	}
+	const text = members.find((member) => member.value.kind === 'text');
+	if (text) return diagnostic('text-aggregate', `Numeric aggregate contains text declaration "${text.label}".`, offset);
 	const quantity = members.find((member) => member.value.kind === 'quantity');
 	if (quantity) return diagnostic('quantity-aggregate', `Aggregate contains unit-bearing declaration "${quantity.label}".`, offset);
-	const values = members.map((member) => member.value.value);
+	const values = members.map((member) => member.value.value as number);
 	const decimalPlaces = node.function === 'count' ? 0 : members.reduce((maximum, member) => member.value.kind === 'number' ? Math.max(maximum, member.value.decimalPlaces) : maximum, 0);
 	let value: number;
 	switch (node.function) {
@@ -358,12 +395,21 @@ function aggregateMembers(node: AggregateExpressionNode, initialMembers: Evaluat
 			if (!values.length) return diagnostic('empty-aggregate', `Cannot take ${node.function} of an empty selection.`, offset);
 			value = node.function === 'min' ? Math.min(...values) : Math.max(...values); break;
 	}
-	const provenance = {
+	const provenance = memberProvenance(members, node);
+	return { kind: 'success', value: { kind: 'number', value, decimalPlaces, provenance }, display: options.formatNumber(value, decimalPlaces) };
+}
+
+function memberProvenance(members: EvaluatedDeclaration[], node: AggregateExpressionNode) {
+	return {
 		declarationIds: Array.from(new Set(members.flatMap((member) => member.value.provenance?.declarationIds ?? [member.declarationId]))),
 		sourceOffsets: Array.from(new Set(members.flatMap((member) => member.value.provenance?.sourceOffsets ?? [member.sourceOffset]))),
 		localAccumulationIds: Array.from(new Set(members.flatMap((member) => member.localAccumulationIds))).filter((id) => node.scope !== 'local' || id.startsWith(`local:${node.group}:`)),
 	};
-	return { kind: 'success', value: { kind: 'number', value, decimalPlaces, provenance }, display: options.formatNumber(value, decimalPlaces) };
+}
+
+function normalizeRegionalName(value: string): string {
+	const normalized = /\s/u.test(value) ? normalizeLabel(value) : normalizeSigil(value);
+	return normalized && !/[=:{},!|`+\-*/^()\[\]]/u.test(normalized) ? normalized : '';
 }
 
 function diagnostic(code: string, message: string, offset: number): ErrorOutcome {

@@ -40,6 +40,10 @@ assert.equal(parseDeclaration('first = `=1` second = ', '2', 0).kind, 'error');
 assert.equal(parseAggregate('sum:ex{ob,ls}{!late}').kind, 'success');
 assert.equal(parseAggregate('median:ex').kind, 'success');
 assert.equal(parseAggregate('sum:>').kind, 'success');
+assert.equal(parseAggregate('sum:>pay 1{food}').kind, 'success');
+assert.equal(parseAggregate('sum:>[]').kind, 'success');
+assert.equal(parseAggregate('list:items').kind, 'success');
+assert.equal(parseAggregate('list:>[]').kind, 'error');
 assert.equal(parseAggregate('sum::ex').kind, 'error');
 const localAggregate = parseAggregate('sum@CAC{!late}');
 assert.equal(localAggregate.kind, 'success');
@@ -153,6 +157,32 @@ const divideByZero = outcomes('`=1 / 0`')[0];
 assert.equal(divideByZero.kind, 'error');
 if (divideByZero.kind === 'error') assert.equal(divideByZero.diagnostic.code, 'non-finite-result');
 
+// Scientific notation remains one numeric token inside larger arithmetic.
+const scientificCases: Array<[string, number]> = [
+	['2e3', 2000],
+	['2e+3', 2000],
+	['2e-3', 0.002],
+	['1.5e3', 1500],
+	['1.5e+3', 1500],
+	['1.5e-3', 0.0015],
+	['2e3+1', 2001],
+	['2e+3+1', 2001],
+	['2e-3+1', 1.002],
+	['1.5e3+1', 1501],
+	['1.5e+3+1', 1501],
+	['1.5e-3+1', 1.0015],
+	['1.5E3*2', 3000],
+];
+for (const [expression, expected] of scientificCases) {
+	assert.equal(successValue(`Result = \`=${expression}\``, 0), expected, expression);
+}
+const bareExponentName = outcomes('`=e3+1`')[0];
+assert.equal(bareExponentName.kind, 'error');
+if (bareExponentName.kind === 'error') {
+	assert.equal(bareExponentName.diagnostic.code, 'unknown-variable');
+	assert.equal(bareExponentName.diagnostic.message, 'Unknown variable "e3".');
+}
+
 const failedShortName = outcomes('a:t = `=5.00`\ntotal:t = `=sum:t`\nrunning total = `=sum:t`\ndoubled = `=running total * 2`');
 assert.equal(failedShortName[3].kind, 'success');
 if (failedShortName[3].kind === 'success') assert.equal(failedShortName[3].value.value, 10);
@@ -175,6 +205,40 @@ assert.deepEqual(structuralDocument.structures().map((entry) => entry.node.kind)
 const structuralResult = structuralDocument.entries()[3].outcome;
 assert.equal(structuralResult.kind === 'success' ? structuralResult.value.value : NaN, 2);
 assert.equal(evaluateDocument('`=top`', options).diagnostics()[0]?.code, 'unclosed-region');
+
+const namedRegions = outcomes('`=top:first period`\nA:x = `=10`\n`=sum:>first period`\n`=bottom`\nNamed = `=sum:>first period`\n`=top:first period`');
+assert.equal(namedRegions[2].kind === 'error' ? namedRegions[2].diagnostic.code : '', 'region-not-completed');
+assert.equal(namedRegions[4].kind === 'success' ? namedRegions[4].value.value : NaN, 10);
+assert.equal(namedRegions[5].kind === 'error' ? namedRegions[5].diagnostic.code : '', 'duplicate-region-name');
+
+const collectedResults = outcomes('A:a = `=1`\nB:b = `=2`\n`=top`\nA total = `=sum:a`\nB total = `=sum:b`\nAdjusted = `=sum:a + 10`\nAverage = `=avg:a`\nFirst collection = `=sum:>[]`\nSecond collection = `=sum:>[]`\n`=bottom`');
+assert.equal(collectedResults[7].kind === 'success' ? collectedResults[7].value.value : NaN, 3);
+assert.equal(collectedResults[8].kind === 'success' ? collectedResults[8].value.value : NaN, 3);
+
+const allCollectors = outcomes([
+	'A1:a = `=1`', 'A2:a = `=3`', 'B1:b = `=10`', '`=top`',
+	'Sum A = `=sum:a`', 'Sum B = `=sum:b`',
+	'Count A = `=count:a`', 'Count B = `=count:b`',
+	'Average A = `=avg:a`', 'Average B = `=avg:b`',
+	'Median A = `=median:a`', 'Median B = `=median:b`',
+	'Minimum A = `=min:a`', 'Minimum B = `=min:b`',
+	'Maximum A = `=max:a`', 'Maximum B = `=max:b`',
+	'Collected sum = `=sum:>[]`', 'Collected count = `=count:>[]`',
+	'Collected average = `=avg:>[]`', 'Collected median = `=median:>[]`',
+	'Collected minimum = `=min:>[]`', 'Collected maximum = `=max:>[]`', '`=bottom`',
+].join('\n'));
+assert.deepEqual(allCollectors.slice(16, 22).map((outcome) => outcome.kind === 'success' ? outcome.value.value : NaN), [14, 2, 6, 6, 1, 10]);
+
+const listResults = outcomes('Alpha:g = `=1`\nBeta:g = `=2`\nNames:text = `=list:g`\nCopy = `=Names`\n`=sum:text`\n`=Names + 1`');
+assert.equal(listResults[2].kind === 'success' ? listResults[2].display : '', 'Alpha, Beta');
+assert.equal(listResults[3].kind === 'success' ? listResults[3].display : '', 'Alpha, Beta');
+assert.equal(listResults[4].kind === 'error' ? listResults[4].diagnostic.code : '', 'text-aggregate');
+assert.equal(listResults[5].kind === 'error' ? listResults[5].diagnostic.code : '', 'text-arithmetic');
+const embeddedList = outcomes('A:g = `=1`\n`=list:g + 1`')[1];
+assert.equal(embeddedList.kind === 'error' ? embeddedList.diagnostic.code : '', 'text-arithmetic');
+assert.equal(displays('A:g = `=1`\nEmpty = `=list:g{missing}`')[1], '');
+const unknownList = outcomes('`=list:missing`')[0];
+assert.equal(unknownList.kind === 'error' ? unknownList.diagnostic.code : '', 'unknown-group');
 assert.equal(shouldConcealStructuralMarkerInReadingView(true), true);
 assert.equal(shouldConcealStructuralMarkerInReadingView(true, { severity: 'warning' }), false);
 assert.equal(shouldConcealStructuralMarkerInReadingView(false), false);

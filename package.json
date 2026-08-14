@@ -1,6 +1,6 @@
 {
 	"name": "obsidian-quantities",
-	"version": "0.5.0",
+	"version": "0.6.0",
 	"description": "Calculate with quantities, variables, units, and scoped aggregates directly in your notes.",
 	"main": "main.js",
 	"scripts": {

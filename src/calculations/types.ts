@@ -6,7 +6,8 @@ export interface ValueProvenance {
 
 export type EvaluatedValue =
 	| { kind: 'number'; value: number; decimalPlaces: number; provenance?: ValueProvenance }
-	| { kind: 'quantity'; value: number; unit: string; dimension: string; provenance?: ValueProvenance };
+	| { kind: 'quantity'; value: number; unit: string; dimension: string; provenance?: ValueProvenance }
+	| { kind: 'text'; value: string; provenance?: ValueProvenance };
 
 export interface EvaluationDiagnostic {
 	code: string;
@@ -35,6 +36,8 @@ export interface EvaluatedDeclaration {
 	groups: string[];
 	localAccumulationIds: string[];
 	containsAggregate: boolean;
+	rootAggregateFunction?: import('./aggregate').AggregateFunction;
+	aggregateResultCollection: boolean;
 	sourceOffset: number;
 }
 
@@ -45,6 +48,8 @@ export interface RegionalAccumulation {
 	members: EvaluatedDeclaration[];
 	openedAt: number;
 	closedAt?: number;
+	name?: string;
+	nameSource?: string;
 }
 
 export interface LocalAccumulation {
@@ -75,6 +80,8 @@ export interface LocalEvaluationContext {
 export interface RegionalEvaluationContext {
 	active?: RegionalAccumulation;
 	latestCompleted?: RegionalAccumulation;
+	namedCompleted: Map<string, RegionalAccumulation>;
+	usedNames: Set<string>;
 	nextOrdinal: number;
 }
 

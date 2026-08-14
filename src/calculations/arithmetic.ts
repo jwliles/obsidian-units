@@ -24,7 +24,14 @@ function resolveVariables(source: string, variables: Map<string, EvaluatedValue>
 			return `${prefix}(${value.value})`;
 		});
 	}
-	const identifier = expression.match(/[\p{L}_][\p{L}\p{N}_ ]*/u)?.[0].trim();
+	// Exponent markers are part of numeric literals, not variable identifiers.
+	// Mask complete literals before looking for an unresolved name so `1.5e3+2`
+	// reaches the arithmetic parser while a genuinely bare `e3` still errors.
+	const identifierSource = expression.replace(
+		/(^|[^\p{L}\p{N}_])((?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)/giu,
+		(_match, prefix: string, literal: string) => `${prefix}${' '.repeat(literal.length)}`,
+	);
+	const identifier = identifierSource.match(/[\p{L}_][\p{L}\p{N}_ ]*/u)?.[0].trim();
 	return identifier ? { expression, unknown: identifier, decimalPlaces } : { expression, decimalPlaces };
 }
 
@@ -67,8 +74,10 @@ function damerauLevenshtein(a: string, b: string): number {
 
 function maximumLiteralDecimalPlaces(source: string): number {
 	let maximum = 0;
-	for (const match of source.matchAll(/(?:^|[^\p{L}\p{N}_])(?:\d+\.(\d*)|\.(\d+))/gu)) {
-		maximum = Math.max(maximum, (match[1] ?? match[2] ?? '').length);
+	for (const match of source.matchAll(/(?:^|[^\p{L}\p{N}_])(?:\d+(?:\.(\d*))?|\.(\d+))(?:e([+-]?\d+))?/giu)) {
+		const mantissaPlaces = (match[1] ?? match[2] ?? '').length;
+		const exponent = Number(match[3] ?? 0);
+		maximum = Math.max(maximum, mantissaPlaces + Math.max(0, -exponent));
 	}
 	return maximum;
 }

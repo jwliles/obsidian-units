@@ -7,6 +7,7 @@ export interface AggregateExpressionNode {
 	group: string;
 	groupSource: string;
 	filters: AggregateFilter[];
+	resultCollection: boolean;
 }
 
 /**
@@ -19,7 +20,7 @@ export interface ScalarExpressionNode {
 	aggregates: AggregateOccurrence[];
 }
 
-export type StructuralNode = { kind: 'region-top' } | { kind: 'region-bottom' };
+export type StructuralNode = { kind: 'region-top'; name?: string; nameSource?: string } | { kind: 'region-bottom' };
 
 export type ExpressionNode = AggregateExpressionNode | ScalarExpressionNode;
 

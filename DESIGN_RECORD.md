@@ -5,7 +5,9 @@
 The normative rules live in [SEMANTICS.md](SEMANTICS.md). This record retains
 only decisions and rationale that remain useful. Earlier experiments involving
 same-label closure, punctuation terminators, self-sigil shorthand, and
-label/sigil collision errors have been retired.
+label/sigil collision errors have been retired. Accepted but unimplemented
+directions are consolidated in [FUTURE_IDEAS.md](FUTURE_IDEAS.md); confirmed
+implementation defects are tracked in [DEFECTS.md](DEFECTS.md).
 
 ## Explicit ownership
 
@@ -52,6 +54,12 @@ The selected rule gives punctuation an operational meaning:
 - The next matching declaration opens a fresh local accumulation.
 - Exact `top` and `bottom` expressions delimit positional regions.
 - `function:>` reads the active or latest completed region without closing it.
+- `top:name` creates a uniquely named region that becomes addressable through
+  `function:>name` after closure.
+- `FUNCTION:>[]` combines first-level, root-only results of the same numeric
+  aggregate function within the selected current region.
+- `list` reuses ordinary aggregate selection but returns contributor labels as
+  a text value; numeric use of that text fails explicitly.
 
 Closure belongs to the aggregate expression, not to the label `Total` and not
 to Markdown headings. An unrelated bare declaration cannot accidentally close
@@ -129,9 +137,10 @@ previous aggregate result does not set this flag.
 - Fixture-level marker configuration or a permanently default-marker corpus.
 - Decisions for aggregating unit-bearing quantities and aggregate-containing
   declaration histories beyond the existing recursion safety rule.
-- Syntax and semantics for deliberately including aggregate-containing
-  declarations in regional reads.
-- Named or indexed access to historical regions beyond assigning a regional
-  aggregate result to a normal variable or membership.
+- File eligibility controlled by an All/None default, vault-relative path/glob
+  exceptions that invert it, and boolean `quantities: true` or `false`
+  frontmatter as the final override.
+- Multi-region member-set selection, indexed regions, broader bracket query
+  forms, and `list:>[]`.
 - A `mode` aggregate, unless a use case establishes its tie semantics.
 - Currency as either presentation or a semantic value type.

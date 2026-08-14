@@ -1,13 +1,13 @@
 import { normalizeLabel, normalizeSigil } from './normalize';
 
-export type AggregateFunction = 'sum' | 'count' | 'avg' | 'median' | 'min' | 'max';
+export type AggregateFunction = 'sum' | 'count' | 'avg' | 'median' | 'min' | 'max' | 'list';
 export type AggregateScope = 'global' | 'local' | 'regional';
 export interface AggregateFilter { negated: boolean; sigils: string[] }
-export interface AggregateExpression { fn: AggregateFunction; scope: AggregateScope; group: string; groupSource: string; filters: AggregateFilter[] }
+export interface AggregateExpression { fn: AggregateFunction; scope: AggregateScope; group: string; groupSource: string; filters: AggregateFilter[]; resultCollection: boolean }
 export interface AggregateOccurrence { node: AggregateExpression; from: number; to: number }
 export type AggregateParseOutcome = { kind: 'success'; node: AggregateExpression } | { kind: 'none' } | { kind: 'error'; code?: string; message: string };
 
-const FUNCTIONS = ['sum', 'count', 'avg', 'median', 'min', 'max'] as const;
+const FUNCTIONS = ['sum', 'count', 'avg', 'median', 'min', 'max', 'list'] as const;
 const RESERVED = new Set(['top', 'bottom']);
 
 export function parseAggregate(source: string): AggregateParseOutcome {
@@ -16,7 +16,7 @@ export function parseAggregate(source: string): AggregateParseOutcome {
 	if (anyHead && !(FUNCTIONS as readonly string[]).includes(anyHead[1].toLowerCase())) {
 		return error(`Unknown aggregate function "${anyHead[1]}".`);
 	}
-	if (/^(?:sum|count|avg|median|min|max)::/i.test(trimmed)) return error('Malformed aggregate expression.');
+	if (/^(?:sum|count|avg|median|min|max|list)::/i.test(trimmed)) return error('Malformed aggregate expression.');
 	for (const clause of trimmed.matchAll(/\{([^{}]*)\}/g)) {
 		if (!clause[1].trim()) return error('Aggregate filters cannot be empty.');
 		const terms = clause[1].split(',').map((term) => term.trim());
@@ -28,14 +28,14 @@ export function parseAggregate(source: string): AggregateParseOutcome {
 			return error('"top" and "bottom" are reserved for regional structure.', 'reserved-identifier');
 		}
 	}
-	const namedTarget = trimmed.match(/^(?:sum|count|avg|median|min|max)(?:@|:)(?!>)([^{}+\-*/^)]+)/i)?.[1].trim();
+	const namedTarget = trimmed.match(/^(?:sum|count|avg|median|min|max|list)(?:@|:)(?!>)([^{}+\-*/^)]+)/i)?.[1].trim();
 	if (namedTarget && RESERVED.has(normalizeMembership(namedTarget))) {
 		return error('"top" and "bottom" are reserved for regional structure.', 'reserved-identifier');
 	}
 	const leading = source.length - source.trimStart().length;
 	const parsed = parseAggregateAt(source, leading);
 	if (!parsed) {
-		if (/^(?:sum|count|avg|median|min|max)(?:\b|[:@])/i.test(trimmed)) return error('Malformed aggregate expression.');
+		if (/^(?:sum|count|avg|median|min|max|list)(?:\b|[:@])/i.test(trimmed)) return error('Malformed aggregate expression.');
 		return { kind: 'none' };
 	}
 	if (source.slice(parsed.to).trim()) return error('Malformed aggregate expression.');
@@ -44,7 +44,7 @@ export function parseAggregate(source: string): AggregateParseOutcome {
 
 export function findAggregateOccurrences(source: string): AggregateOccurrence[] {
 	const occurrences: AggregateOccurrence[] = [];
-	const startPattern = /\b(?:sum|count|avg|median|min|max)(?=[:@])/giu;
+	const startPattern = /\b(?:sum|count|avg|median|min|max|list)(?=[:@])/giu;
 	for (const match of source.matchAll(startPattern)) {
 		const from = match.index ?? 0;
 		const parsed = parseAggregateAt(source, from);
@@ -63,8 +63,29 @@ function parseAggregateAt(source: string, from: number): AggregateOccurrence | n
 	let index = head[0].length;
 	let groupSource = '';
 	let group = '';
+	let resultCollection = false;
 
-	if (scope !== 'regional') {
+	if (scope === 'regional') {
+		if (input.slice(index, index + 2) === '[]') {
+			if (fn === 'list') return null;
+			resultCollection = true;
+			index += 2;
+		} else {
+			const rest = input.slice(index);
+			let end = rest.length;
+			const filter = rest.indexOf('{');
+			if (filter >= 0) end = Math.min(end, filter);
+			const closeParen = rest.indexOf(')');
+			if (closeParen >= 0) end = Math.min(end, closeParen);
+			const operator = rest.search(/[+\-*/^]/u);
+			if (operator >= 0) end = Math.min(end, operator);
+			groupSource = rest.slice(0, end).trim();
+			group = groupSource ? normalizeMembership(groupSource) : '';
+			if (groupSource && !validMembership(group)) return null;
+			index += end;
+			while (/\s/u.test(input[index] ?? '')) index++;
+		}
+	} else {
 		const rest = input.slice(index);
 		let end = rest.length;
 		const filter = rest.indexOf('{');
@@ -95,7 +116,7 @@ function parseAggregateAt(source: string, from: number): AggregateOccurrence | n
 		index = close + 1;
 	}
 
-	return { node: { fn: fn as AggregateFunction, scope, group, groupSource, filters }, from, to: from + index };
+	return { node: { fn: fn as AggregateFunction, scope, group, groupSource, filters, resultCollection }, from, to: from + index };
 }
 
 function normalizeMembership(value: string): string {

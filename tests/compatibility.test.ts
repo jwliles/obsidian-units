@@ -19,6 +19,13 @@ assert.equal(evaluate('10 / 2 =')!.text, '5');
 assert.equal(evaluate('2(3 + 4)')!.text, '14');
 assert.equal(evaluate('33 ounces to gram')!.consumeTrailingS, true);
 
+// Decimal precision may round normally, but it must not disguise a non-zero
+// result as zero. Extend only far enough to expose the first significant digit.
+const lowPrecisionSettings = { ...settings, precision: 2 };
+assert.equal(evaluateInlineExpressionFallback('2e-3', lowPrecisionSettings, new Map(), true)!.text, '0.002');
+assert.equal(evaluateInlineExpressionFallback('1.5e-3', lowPrecisionSettings, new Map(), true)!.text, '0.002');
+assert.equal(evaluateInlineExpressionFallback('1 / 1000', lowPrecisionSettings, new Map(), true)!.text, '0.001');
+
 // Density conversion in both directions.
 const densitySettings = { ...settings, densities: [{ name: 'maple syrup', value: 1.37, unit: 'g/ml' }] };
 assert.ok(evaluateInlineExpressionFallback('1 tsp of maple syrup to g', densitySettings, new Map(), true));

@@ -24,6 +24,8 @@ The default `` `=` `` prefix is configurable, so users can avoid inline-query co
 This README is the short tour. The [manual](MANUAL.md) is the complete user
 guide, [semantics](SEMANTICS.md) defines the language precisely, and the
 [design record](DESIGN_RECORD.md) explains why its major rules were chosen.
+[Future ideas](FUTURE_IDEAS.md) are unimplemented proposals; confirmed
+implementation problems are tracked separately in [DEFECTS.md](DEFECTS.md).
 
 ## Installation
 
@@ -41,7 +43,7 @@ For development, clone the repository directly into that plugin directory, run `
 - Converts between mass and volume using configurable material densities.
 - Evaluates arithmetic with variables, parentheses, exponents, scientific notation, and implicit multiplication.
 - Evaluates declarations from top to bottom with clear unknown-variable and forward-reference errors.
-- Aggregates successful declarations with `sum`, `count`, `avg`, `median`, `min`, and `max`.
+- Aggregates successful declarations with `sum`, `count`, `avg`, `median`, `min`, and `max`, or displays contributors with `list`.
 - Filters groups with OR, AND, and exclusion clauses.
 - Closes local accumulations explicitly when an `@` aggregate reads them.
 - Aggregates declarations between balanced `top` and `bottom` regional markers.
@@ -110,6 +112,21 @@ Final = `=sum:>`
 `bottom`. Reads do not close a region. The `top` and `bottom` names are reserved
 for regional structure. Reading View conceals these markers and declaration
 sigils as calculation metadata; Source Mode and Live Preview retain them.
+
+Name a region when its positional member set must be queried later:
+
+```markdown
+`=top:pay 1`
+A = `=10`
+B = `=20`
+`=bottom`
+
+Total = `=sum:>pay 1`
+```
+
+Within a summary region, `sum:>[]` sums declarations that are themselves pure
+`sum` results; the same form works for the other numeric functions. Use
+`list:group`, `list@group`, or `list:>` to display contributing labels.
 
 Aggregate targets end when arithmetic begins, so compact expressions work:
 

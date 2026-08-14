@@ -26,7 +26,7 @@ for (const file of fixtureFiles) {
 		const commentSource = followingLines[0].includes('<!--')
 			? followingLines[0]
 			: followingLines[1]?.trimStart().startsWith('<!--') ? followingLines[1] : '';
-		const expected = commentSource.match(/<!--\s*expect:(value|error|structure|warning)\s+([^\s>]+)/i);
+		const expected = commentSource.match(/<!--\s*expect:(value|error|structure|warning)\s+(.+?)\s*-->/i);
 		if (!expected) continue;
 
 		assertions++;

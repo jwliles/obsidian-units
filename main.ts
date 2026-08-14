@@ -1269,8 +1269,10 @@ export function evaluateCompatibilityExpression(expression: string, values: Map<
 }
 
 function decimalPlacesInLiteral(expression: string): number {
-	const match = stripArithmeticEquals(expression).match(/^[+-]?(?:\d+\.(\d*)|\.(\d+))(?:e[+-]?\d+)?$/i);
-	return Math.min((match?.[1] ?? match?.[2] ?? '').length, 10);
+	const match = stripArithmeticEquals(expression).match(/^[+-]?(?:\d+(?:\.(\d*))?|\.(\d+))(?:e([+-]?\d+))?$/i);
+	const mantissaPlaces = (match?.[1] ?? match?.[2] ?? '').length;
+	const exponent = Number(match?.[3] ?? 0);
+	return Math.min(mantissaPlaces + Math.max(0, -exponent), 10);
 }
 
 function stripInlineCodeMarkers(text: string): string {
@@ -1448,9 +1450,19 @@ function formatNumber(value: number, precision: number, minimumDecimalPlaces = 0
 		value = 0;
 	}
 
-	const formatted = value.toFixed(precision);
+	let effectivePrecision = precision;
+	// A non-zero result must never be presented as zero merely because the
+	// configured decimal-place cap is too small to reveal its first digit.
+	while (value !== 0 && Number(value.toFixed(effectivePrecision)) === 0 && effectivePrecision < 100) {
+		effectivePrecision++;
+	}
+	if (value !== 0 && Number(value.toFixed(effectivePrecision)) === 0) {
+		return value.toExponential(precision);
+	}
+
+	const formatted = value.toFixed(effectivePrecision);
 	let compact = formatted.replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
-	const minimum = Math.min(Math.max(0, minimumDecimalPlaces), precision);
+	const minimum = Math.min(Math.max(0, minimumDecimalPlaces), effectivePrecision);
 	if (minimum === 0) return compact;
 	const point = compact.indexOf('.');
 	if (point < 0) return `${compact}.${'0'.repeat(minimum)}`;
@@ -1461,7 +1473,7 @@ function formatNumber(value: number, precision: number, minimumDecimalPlaces = 0
 
 function formatNumericLiteral(text: string, precision: number): string | null {
 	const expression = stripArithmeticEquals(stripInlineCodeMarkers(text.trim()));
-	const match = expression.match(/^([+-]?(?:\d+(?:\.(\d*))?|\.(\d+))(?:e[+-]?\d+)?)$/i);
+	const match = expression.match(/^([+-]?(?:\d+(?:\.(\d*))?|\.(\d+))(?:e([+-]?\d+))?)$/i);
 	if (!match) {
 		return null;
 	}
@@ -1472,12 +1484,9 @@ function formatNumericLiteral(text: string, precision: number): string | null {
 	}
 
 	const decimalPart = match[2] ?? match[3];
-	if (decimalPart === undefined) {
-		return formatNumber(value, precision);
-	}
-
-	const decimalPlaces = Math.min(decimalPart.length, precision);
-	return value.toFixed(decimalPlaces);
+	const exponent = Number(match[4] ?? 0);
+	const writtenPlaces = (decimalPart?.length ?? 0) + Math.max(0, -exponent);
+	return formatNumber(value, precision, writtenPlaces);
 }
 
 function parseArithmetic(text: string, variables: VariableMap, isExplicit: boolean): number | null {
@@ -2124,7 +2133,7 @@ class ObsidianQuantitiesSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Decimal precision')
-			.setDesc('Number of decimal places shown in rendered results.')
+			.setDesc('Normal maximum decimal places. Non-zero values may use more rather than appear as zero.')
 			.addSlider((slider) => slider
 				.setLimits(0, 10, 1)
 				.setValue(this.plugin.settings.precision)

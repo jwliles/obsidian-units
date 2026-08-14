@@ -15,6 +15,7 @@ export function parseExpression(source: string): ExpressionParseOutcome {
 				group: aggregate.node.group,
 				groupSource: aggregate.node.groupSource,
 				filters: aggregate.node.filters,
+				resultCollection: aggregate.node.resultCollection,
 			},
 		};
 	}
