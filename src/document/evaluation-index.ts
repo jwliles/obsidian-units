@@ -3,6 +3,7 @@ import { evaluateArithmetic } from '../calculations/arithmetic';
 import { parseDeclaration } from '../calculations/declarations';
 import { parseExpression } from '../calculations/expression-parser';
 import { normalizeLabel, normalizeSigil } from '../calculations/normalize';
+import { DecimalValue, ExactDecimal } from '../calculations/decimal';
 import { DocumentEvaluationIndex, EvaluatedDeclaration, EvaluatedValue, EvaluationContext, EvaluationDiagnostic, EvaluationOutcome, InlineSource } from '../calculations/types';
 import { scanInlineCode } from './scanner';
 
@@ -20,7 +21,7 @@ export interface CompatibilityDiagnostic {
 }
 
 export interface DocumentEngineOptions {
-	formatNumber(value: number, minimumDecimalPlaces?: number): string;
+	formatNumber(value: number | string, minimumDecimalPlaces?: number): string;
 	evaluateCompatibility?(source: string, variables: Map<string, EvaluatedValue>): CompatibilityEvaluation | CompatibilityDiagnostic | null;
 	marker?: string;
 	incorrectMarkers?: string[];
@@ -242,8 +243,8 @@ function evaluateScalar(node: ScalarExpressionNode, context: EvaluationContext, 
 	return {
 		outcome: {
 			kind: 'success',
-			value: { kind: 'number', value: arithmetic.value, decimalPlaces: arithmetic.decimalPlaces },
-			display: options.formatNumber(arithmetic.value, arithmetic.decimalPlaces),
+			value: { kind: 'number', value: arithmetic.value, exact: arithmetic.exact, decimalPlaces: arithmetic.decimalPlaces },
+			display: options.formatNumber(arithmetic.exact, arithmetic.decimalPlaces),
 		},
 		localGroups,
 	};
@@ -374,29 +375,32 @@ function aggregateMembers(node: AggregateExpressionNode, initialMembers: Evaluat
 	if (text) return diagnostic('text-aggregate', `Numeric aggregate contains text declaration "${text.label}".`, offset);
 	const quantity = members.find((member) => member.value.kind === 'quantity');
 	if (quantity) return diagnostic('quantity-aggregate', `Aggregate contains unit-bearing declaration "${quantity.label}".`, offset);
-	const values = members.map((member) => member.value.value as number);
+	const values = members.map((member) => new ExactDecimal(member.value.kind === 'text' ? 0 : member.value.exact ?? member.value.value.toString()));
 	const decimalPlaces = node.function === 'count' ? 0 : members.reduce((maximum, member) => member.value.kind === 'number' ? Math.max(maximum, member.value.decimalPlaces) : maximum, 0);
-	let value: number;
+	let value: DecimalValue;
 	switch (node.function) {
-		case 'count': value = values.length; break;
-		case 'sum': value = values.reduce((sum, item) => sum + item, 0); break;
+		case 'count': value = new ExactDecimal(values.length); break;
+		case 'sum': value = values.reduce((sum, item) => sum.plus(item), new ExactDecimal(0)); break;
 		case 'avg':
 			if (!values.length) return diagnostic('empty-aggregate', 'Cannot average an empty selection.', offset);
-			value = values.reduce((sum, item) => sum + item, 0) / values.length; break;
+			value = values.reduce((sum, item) => sum.plus(item), new ExactDecimal(0)).dividedBy(values.length); break;
 		case 'median': {
 			if (!values.length) return diagnostic('empty-aggregate', 'Cannot take the median of an empty selection.', offset);
-			const sorted = [...values].sort((a, b) => a - b);
+			const sorted = [...values].sort((a, b) => a.comparedTo(b));
 			const middle = Math.floor(sorted.length / 2);
-			value = sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+			value = sorted.length % 2 ? sorted[middle] : sorted[middle - 1].plus(sorted[middle]).dividedBy(2);
 			break;
 		}
 		case 'min':
 		case 'max':
 			if (!values.length) return diagnostic('empty-aggregate', `Cannot take ${node.function} of an empty selection.`, offset);
-			value = node.function === 'min' ? Math.min(...values) : Math.max(...values); break;
+			value = values.reduce((selected, item) => node.function === 'min'
+				? (item.lessThan(selected) ? item : selected)
+				: (item.greaterThan(selected) ? item : selected)); break;
 	}
+	const exact = value.isZero() ? '0' : value.toString();
 	const provenance = memberProvenance(members, node);
-	return { kind: 'success', value: { kind: 'number', value, decimalPlaces, provenance }, display: options.formatNumber(value, decimalPlaces) };
+	return { kind: 'success', value: { kind: 'number', value: Number(exact), exact, decimalPlaces, provenance }, display: options.formatNumber(exact, decimalPlaces) };
 }
 
 function memberProvenance(members: EvaluatedDeclaration[], node: AggregateExpressionNode) {

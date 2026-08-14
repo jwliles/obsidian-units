@@ -41,7 +41,7 @@ For development, clone the repository directly into that plugin directory, run `
 
 - Converts length, area, mass, volume, speed, acceleration, data, time, pressure, energy, power, and temperature.
 - Converts between mass and volume using configurable material densities.
-- Evaluates arithmetic with variables, parentheses, exponents, scientific notation, and implicit multiplication.
+- Evaluates arithmetic with exact decimal values, variables, parentheses, exponents, scientific notation, and implicit multiplication.
 - Evaluates declarations from top to bottom with clear unknown-variable and forward-reference errors.
 - Aggregates successful declarations with `sum`, `count`, `avg`, `median`, `min`, and `max`, or displays contributors with `list`.
 - Filters groups with OR, AND, and exclusion clauses.
@@ -111,7 +111,8 @@ Final = `=sum:>`
 `sum:>` reads the active region, or the latest completed region after
 `bottom`. Reads do not close a region. The `top` and `bottom` names are reserved
 for regional structure. Reading View conceals these markers and declaration
-sigils as calculation metadata; Source Mode and Live Preview retain them.
+sigils as calculation metadata. Source Mode always exposes them; Live Preview
+reveals source at the cursor.
 
 Name a region when its positional member set must be queried later:
 
@@ -148,6 +149,12 @@ Old-marker declarations produce a helpful diagnostic. Run **Update Quantities ma
 
 Custom markers are a practical way to avoid an inline syntax collision, but the setting must be synchronized across devices for notes to remain portable.
 
+Rendered note, heading, and block embeds evaluate against the complete embedded
+source note, so their calculations retain the same values they have when read
+directly. Very small non-zero arithmetic and conversion results switch to
+compact scientific notation when fixed notation would require more than ten
+decimal places.
+
 ## Commands
 
 - **Convert units in selection or current line** replaces plain conversion text with an equation-style result.
@@ -173,7 +180,7 @@ Material densities are stored with the rest of the plugin settings in `data.json
 
 ## Errors are visible
 
-Unknown variables, groups, local accumulations, and regions are errors. So are incorrect markers, invalid conversions, division by zero, malformed filters, empty `avg`/`median`/`min`/`max`, and attempts to aggregate unit-bearing quantities. Failed declarations do not enter variables or groups and do not silently contribute zero.
+Unknown variables, groups, local accumulations, and regions are errors. So are incorrect markers, invalid conversions, division by zero, malformed filters, empty `avg`/`median`/`min`/`max`, and attempts to include unit-bearing or text values in numeric aggregates. `list` accepts every successful declaration value because it returns labels rather than reducing values. Failed declarations do not enter variables or groups and do not silently contribute zero.
 
 ## Development
 

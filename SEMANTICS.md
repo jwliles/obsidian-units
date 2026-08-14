@@ -82,6 +82,13 @@ The note is evaluated from top to bottom. Expressions can see only successful
 declaration records above them; there are no forward references. Later records
 never rewrite results already evaluated.
 
+Dimensionless numeric records retain a canonical decimal representation.
+Arithmetic and aggregate reduction use that representation rather than binary
+floating-point values. All operations use a 40-significant-digit, half-even
+decimal context; results exceeding that context and non-terminating results are
+rounded there before the separate presentation stage. Exact zero is
+canonicalized to unsigned zero.
+
 A successful declaration creates exactly one record with:
 
 - a stable declaration identity;
@@ -307,8 +314,10 @@ warning anchored to its opener.
 Reading View conceals valid structural markers rather than rendering them as
 values. It also conceals explicit declaration sigils while retaining the label,
 assignment punctuation, and rendered value. This is presentation only and
-cannot alter source, parsing, evaluation, or membership. Source Mode and Live
-Preview retain complete syntax. Diagnostics take precedence over concealment.
+cannot alter source, parsing, evaluation, or membership. Source Mode exposes
+complete syntax continuously. Live Preview follows Obsidian's normal
+render/reveal behavior and exposes source at the cursor. Diagnostics take
+precedence over concealment.
 An otherwise-empty paragraph or list item hosting a concealed marker may also
 be suppressed in Reading View.
 
