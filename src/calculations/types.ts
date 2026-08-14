@@ -5,8 +5,8 @@ export interface ValueProvenance {
 }
 
 export type EvaluatedValue =
-	| { kind: 'number'; value: number; decimalPlaces: number; provenance?: ValueProvenance }
-	| { kind: 'quantity'; value: number; unit: string; dimension: string; provenance?: ValueProvenance }
+	| { kind: 'number'; value: number; exact?: string; decimalPlaces: number; provenance?: ValueProvenance }
+	| { kind: 'quantity'; value: number; exact?: string; unit: string; dimension: string; provenance?: ValueProvenance }
 	| { kind: 'text'; value: string; provenance?: ValueProvenance };
 
 export interface EvaluationDiagnostic {

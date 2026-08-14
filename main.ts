@@ -1,9 +1,10 @@
-import { App, Editor, MarkdownPostProcessorContext, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, editorLivePreviewField } from 'obsidian';
+import { App, Editor, MarkdownPostProcessorContext, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, editorLivePreviewField, parseLinktext, resolveSubpath } from 'obsidian';
 import { Prec, Range, StateEffect, StateField } from '@codemirror/state';
 import { Decoration, DecorationSet, EditorView, ViewPlugin, ViewUpdate, WidgetType } from '@codemirror/view';
 import { DocumentEvaluationIndex, EvaluatedValue } from './src/calculations/types';
 import { parseAggregate } from './src/calculations/aggregate';
 import { evaluateDocument } from './src/document/evaluation-index';
+import { DecimalValue, ExactDecimal } from './src/calculations/decimal';
 
 type UnitDisplayForm = 'abbr' | 'name';
 
@@ -52,22 +53,22 @@ interface BaseUnit {
 
 interface LinearUnit extends BaseUnit {
 	kind: 'linear';
-	toBase: number;
+	toBase: string | readonly [string, string];
 }
 
 interface AffineUnit extends BaseUnit {
 	kind: 'affine';
-	toBase(value: number): number;
-	fromBase(value: number): number;
+	toBase(value: DecimalValue): DecimalValue;
+	fromBase(value: DecimalValue): DecimalValue;
 }
 
 type Unit = LinearUnit | AffineUnit;
 
 interface Conversion {
-	input: number;
+	input: DecimalValue;
 	source: Unit;
 	target: Unit;
-	output: number;
+	output: DecimalValue;
 }
 
 type InlineRenderMode = 'result' | 'value' | 'unit';
@@ -82,7 +83,7 @@ interface InlineEvaluation {
 	consumeTrailingS: boolean;
 }
 
-type VariableMap = Map<string, number>;
+type VariableMap = Map<string, DecimalValue>;
 
 interface UnitDisplay {
 	abbr: string;
@@ -92,151 +93,151 @@ interface UnitDisplay {
 
 const LINEAR_UNITS: LinearUnit[] = [
 	// Length, base meter.
-	{ canonical: 'mm', dimension: 'length', kind: 'linear', toBase: 0.001 },
-	{ canonical: 'cm', dimension: 'length', kind: 'linear', toBase: 0.01 },
-	{ canonical: 'dm', dimension: 'length', kind: 'linear', toBase: 0.1 },
-	{ canonical: 'm', dimension: 'length', kind: 'linear', toBase: 1 },
-	{ canonical: 'dam', dimension: 'length', kind: 'linear', toBase: 10 },
-	{ canonical: 'hm', dimension: 'length', kind: 'linear', toBase: 100 },
-	{ canonical: 'km', dimension: 'length', kind: 'linear', toBase: 1000 },
-	{ canonical: 'um', dimension: 'length', kind: 'linear', toBase: 0.000001 },
-	{ canonical: 'nm', dimension: 'length', kind: 'linear', toBase: 0.000000001 },
-	{ canonical: 'ang', dimension: 'length', kind: 'linear', toBase: 0.0000000001 },
-	{ canonical: 'in', dimension: 'length', kind: 'linear', toBase: 0.0254 },
-	{ canonical: 'ft', dimension: 'length', kind: 'linear', toBase: 0.3048 },
-	{ canonical: 'yd', dimension: 'length', kind: 'linear', toBase: 0.9144 },
-	{ canonical: 'mi', dimension: 'length', kind: 'linear', toBase: 1609.344 },
-	{ canonical: 'nmi', dimension: 'length', kind: 'linear', toBase: 1852 },
-	{ canonical: 'rod', dimension: 'length', kind: 'linear', toBase: 5.0292 },
-	{ canonical: 'fur', dimension: 'length', kind: 'linear', toBase: 201.168 },
-	{ canonical: 'ly', dimension: 'length', kind: 'linear', toBase: 9460730472580800 },
-	{ canonical: 'pc', dimension: 'length', kind: 'linear', toBase: 30856775814671900 },
+	{ canonical: 'mm', dimension: 'length', kind: 'linear', toBase: '0.001' },
+	{ canonical: 'cm', dimension: 'length', kind: 'linear', toBase: '0.01' },
+	{ canonical: 'dm', dimension: 'length', kind: 'linear', toBase: '0.1' },
+	{ canonical: 'm', dimension: 'length', kind: 'linear', toBase: '1' },
+	{ canonical: 'dam', dimension: 'length', kind: 'linear', toBase: '10' },
+	{ canonical: 'hm', dimension: 'length', kind: 'linear', toBase: '100' },
+	{ canonical: 'km', dimension: 'length', kind: 'linear', toBase: '1000' },
+	{ canonical: 'um', dimension: 'length', kind: 'linear', toBase: '0.000001' },
+	{ canonical: 'nm', dimension: 'length', kind: 'linear', toBase: '0.000000001' },
+	{ canonical: 'ang', dimension: 'length', kind: 'linear', toBase: '0.0000000001' },
+	{ canonical: 'in', dimension: 'length', kind: 'linear', toBase: '0.0254' },
+	{ canonical: 'ft', dimension: 'length', kind: 'linear', toBase: '0.3048' },
+	{ canonical: 'yd', dimension: 'length', kind: 'linear', toBase: '0.9144' },
+	{ canonical: 'mi', dimension: 'length', kind: 'linear', toBase: '1609.344' },
+	{ canonical: 'nmi', dimension: 'length', kind: 'linear', toBase: '1852' },
+	{ canonical: 'rod', dimension: 'length', kind: 'linear', toBase: '5.0292' },
+	{ canonical: 'fur', dimension: 'length', kind: 'linear', toBase: '201.168' },
+	{ canonical: 'ly', dimension: 'length', kind: 'linear', toBase: '9460730472580800' },
+	{ canonical: 'pc', dimension: 'length', kind: 'linear', toBase: '30856775814671900' },
 
 	// Area, base square meter.
-	{ canonical: 'um^2', dimension: 'area', kind: 'linear', toBase: 1e-12 },
-	{ canonical: 'mm^2', dimension: 'area', kind: 'linear', toBase: 0.000001 },
-	{ canonical: 'cm^2', dimension: 'area', kind: 'linear', toBase: 0.0001 },
-	{ canonical: 'dm^2', dimension: 'area', kind: 'linear', toBase: 0.01 },
-	{ canonical: 'm^2', dimension: 'area', kind: 'linear', toBase: 1 },
-	{ canonical: 'dam^2', dimension: 'area', kind: 'linear', toBase: 100 },
-	{ canonical: 'hm^2', dimension: 'area', kind: 'linear', toBase: 10000 },
-	{ canonical: 'km^2', dimension: 'area', kind: 'linear', toBase: 1000000 },
-	{ canonical: 'in^2', dimension: 'area', kind: 'linear', toBase: 0.00064516 },
-	{ canonical: 'ft^2', dimension: 'area', kind: 'linear', toBase: 0.09290304 },
-	{ canonical: 'yd^2', dimension: 'area', kind: 'linear', toBase: 0.83612736 },
-	{ canonical: 'mi^2', dimension: 'area', kind: 'linear', toBase: 2589988.110336 },
-	{ canonical: 'acre', dimension: 'area', kind: 'linear', toBase: 4046.8564224 },
-	{ canonical: 'ha', dimension: 'area', kind: 'linear', toBase: 10000 },
+	{ canonical: 'um^2', dimension: 'area', kind: 'linear', toBase: '1e-12' },
+	{ canonical: 'mm^2', dimension: 'area', kind: 'linear', toBase: '0.000001' },
+	{ canonical: 'cm^2', dimension: 'area', kind: 'linear', toBase: '0.0001' },
+	{ canonical: 'dm^2', dimension: 'area', kind: 'linear', toBase: '0.01' },
+	{ canonical: 'm^2', dimension: 'area', kind: 'linear', toBase: '1' },
+	{ canonical: 'dam^2', dimension: 'area', kind: 'linear', toBase: '100' },
+	{ canonical: 'hm^2', dimension: 'area', kind: 'linear', toBase: '10000' },
+	{ canonical: 'km^2', dimension: 'area', kind: 'linear', toBase: '1000000' },
+	{ canonical: 'in^2', dimension: 'area', kind: 'linear', toBase: '0.00064516' },
+	{ canonical: 'ft^2', dimension: 'area', kind: 'linear', toBase: '0.09290304' },
+	{ canonical: 'yd^2', dimension: 'area', kind: 'linear', toBase: '0.83612736' },
+	{ canonical: 'mi^2', dimension: 'area', kind: 'linear', toBase: '2589988.110336' },
+	{ canonical: 'acre', dimension: 'area', kind: 'linear', toBase: '4046.8564224' },
+	{ canonical: 'ha', dimension: 'area', kind: 'linear', toBase: '10000' },
 
 	// Mass, base gram.
-	{ canonical: 'mcg', dimension: 'mass', kind: 'linear', toBase: 0.000001 },
-	{ canonical: 'mg', dimension: 'mass', kind: 'linear', toBase: 0.001 },
-	{ canonical: 'g', dimension: 'mass', kind: 'linear', toBase: 1 },
-	{ canonical: 'kg', dimension: 'mass', kind: 'linear', toBase: 1000 },
-	{ canonical: 'ct', dimension: 'mass', kind: 'linear', toBase: 0.2 },
-	{ canonical: 'oz', dimension: 'mass', kind: 'linear', toBase: 28.349523125 },
-	{ canonical: 'lb', dimension: 'mass', kind: 'linear', toBase: 453.59237 },
-	{ canonical: 'st', dimension: 'mass', kind: 'linear', toBase: 6350.29318 },
-	{ canonical: 'ton', dimension: 'mass', kind: 'linear', toBase: 907184.74 },
-	{ canonical: 'tonne', dimension: 'mass', kind: 'linear', toBase: 1000000 },
+	{ canonical: 'mcg', dimension: 'mass', kind: 'linear', toBase: '0.000001' },
+	{ canonical: 'mg', dimension: 'mass', kind: 'linear', toBase: '0.001' },
+	{ canonical: 'g', dimension: 'mass', kind: 'linear', toBase: '1' },
+	{ canonical: 'kg', dimension: 'mass', kind: 'linear', toBase: '1000' },
+	{ canonical: 'ct', dimension: 'mass', kind: 'linear', toBase: '0.2' },
+	{ canonical: 'oz', dimension: 'mass', kind: 'linear', toBase: '28.349523125' },
+	{ canonical: 'lb', dimension: 'mass', kind: 'linear', toBase: '453.59237' },
+	{ canonical: 'st', dimension: 'mass', kind: 'linear', toBase: '6350.29318' },
+	{ canonical: 'ton', dimension: 'mass', kind: 'linear', toBase: '907184.74' },
+	{ canonical: 'tonne', dimension: 'mass', kind: 'linear', toBase: '1000000' },
 
 	// Volume, base liter.
-	{ canonical: 'ml', dimension: 'volume', kind: 'linear', toBase: 0.001 },
-	{ canonical: 'cl', dimension: 'volume', kind: 'linear', toBase: 0.01 },
-	{ canonical: 'dl', dimension: 'volume', kind: 'linear', toBase: 0.1 },
-	{ canonical: 'l', dimension: 'volume', kind: 'linear', toBase: 1 },
-	{ canonical: 'tsp', dimension: 'volume', kind: 'linear', toBase: 0.00492892159375 },
-	{ canonical: 'tbsp', dimension: 'volume', kind: 'linear', toBase: 0.01478676478125 },
-	{ canonical: 'fl oz', dimension: 'volume', kind: 'linear', toBase: 0.0295735295625 },
-	{ canonical: 'cup', dimension: 'volume', kind: 'linear', toBase: 0.2365882365 },
-	{ canonical: 'pt', dimension: 'volume', kind: 'linear', toBase: 0.473176473 },
-	{ canonical: 'qt', dimension: 'volume', kind: 'linear', toBase: 0.946352946 },
-	{ canonical: 'gal', dimension: 'volume', kind: 'linear', toBase: 3.785411784 },
-	{ canonical: 'in^3', dimension: 'volume', kind: 'linear', toBase: 0.016387064 },
-	{ canonical: 'ft^3', dimension: 'volume', kind: 'linear', toBase: 28.316846592 },
-	{ canonical: 'yd^3', dimension: 'volume', kind: 'linear', toBase: 764.554857984 },
-	{ canonical: 'm^3', dimension: 'volume', kind: 'linear', toBase: 1000 },
+	{ canonical: 'ml', dimension: 'volume', kind: 'linear', toBase: '0.001' },
+	{ canonical: 'cl', dimension: 'volume', kind: 'linear', toBase: '0.01' },
+	{ canonical: 'dl', dimension: 'volume', kind: 'linear', toBase: '0.1' },
+	{ canonical: 'l', dimension: 'volume', kind: 'linear', toBase: '1' },
+	{ canonical: 'tsp', dimension: 'volume', kind: 'linear', toBase: '0.00492892159375' },
+	{ canonical: 'tbsp', dimension: 'volume', kind: 'linear', toBase: '0.01478676478125' },
+	{ canonical: 'fl oz', dimension: 'volume', kind: 'linear', toBase: '0.0295735295625' },
+	{ canonical: 'cup', dimension: 'volume', kind: 'linear', toBase: '0.2365882365' },
+	{ canonical: 'pt', dimension: 'volume', kind: 'linear', toBase: '0.473176473' },
+	{ canonical: 'qt', dimension: 'volume', kind: 'linear', toBase: '0.946352946' },
+	{ canonical: 'gal', dimension: 'volume', kind: 'linear', toBase: '3.785411784' },
+	{ canonical: 'in^3', dimension: 'volume', kind: 'linear', toBase: '0.016387064' },
+	{ canonical: 'ft^3', dimension: 'volume', kind: 'linear', toBase: '28.316846592' },
+	{ canonical: 'yd^3', dimension: 'volume', kind: 'linear', toBase: '764.554857984' },
+	{ canonical: 'm^3', dimension: 'volume', kind: 'linear', toBase: '1000' },
 
 	// Speed, base meter per second.
-	{ canonical: 'cm/s', dimension: 'speed', kind: 'linear', toBase: 0.01 },
-	{ canonical: 'm/s', dimension: 'speed', kind: 'linear', toBase: 1 },
-	{ canonical: 'm/min', dimension: 'speed', kind: 'linear', toBase: 1 / 60 },
-	{ canonical: 'm/h', dimension: 'speed', kind: 'linear', toBase: 1 / 3600 },
-	{ canonical: 'km/h', dimension: 'speed', kind: 'linear', toBase: 0.2777777777777778 },
-	{ canonical: 'km/s', dimension: 'speed', kind: 'linear', toBase: 1000 },
-	{ canonical: 'mph', dimension: 'speed', kind: 'linear', toBase: 0.44704 },
-	{ canonical: 'knot', dimension: 'speed', kind: 'linear', toBase: 0.5144444444444445 },
-	{ canonical: 'ft/s', dimension: 'speed', kind: 'linear', toBase: 0.3048 },
-	{ canonical: 'ft/min', dimension: 'speed', kind: 'linear', toBase: 0.00508 },
-	{ canonical: 'ft/h', dimension: 'speed', kind: 'linear', toBase: 0.00008466666666666667 },
+	{ canonical: 'cm/s', dimension: 'speed', kind: 'linear', toBase: '0.01' },
+	{ canonical: 'm/s', dimension: 'speed', kind: 'linear', toBase: '1' },
+	{ canonical: 'm/min', dimension: 'speed', kind: 'linear', toBase: ['1', '60'] },
+	{ canonical: 'm/h', dimension: 'speed', kind: 'linear', toBase: ['1', '3600'] },
+	{ canonical: 'km/h', dimension: 'speed', kind: 'linear', toBase: ['5', '18'] },
+	{ canonical: 'km/s', dimension: 'speed', kind: 'linear', toBase: '1000' },
+	{ canonical: 'mph', dimension: 'speed', kind: 'linear', toBase: '0.44704' },
+	{ canonical: 'knot', dimension: 'speed', kind: 'linear', toBase: ['463', '900'] },
+	{ canonical: 'ft/s', dimension: 'speed', kind: 'linear', toBase: '0.3048' },
+	{ canonical: 'ft/min', dimension: 'speed', kind: 'linear', toBase: '0.00508' },
+	{ canonical: 'ft/h', dimension: 'speed', kind: 'linear', toBase: ['127', '1500000'] },
 
 	// Acceleration, base meter per second squared.
-	{ canonical: 'cm/s^2', dimension: 'acceleration', kind: 'linear', toBase: 0.01 },
-	{ canonical: 'm/s^2', dimension: 'acceleration', kind: 'linear', toBase: 1 },
-	{ canonical: 'km/h/s', dimension: 'acceleration', kind: 'linear', toBase: 0.2777777777777778 },
-	{ canonical: 'in/s^2', dimension: 'acceleration', kind: 'linear', toBase: 0.0254 },
-	{ canonical: 'ft/s^2', dimension: 'acceleration', kind: 'linear', toBase: 0.3048 },
-	{ canonical: 'mph/s', dimension: 'acceleration', kind: 'linear', toBase: 0.44704 },
+	{ canonical: 'cm/s^2', dimension: 'acceleration', kind: 'linear', toBase: '0.01' },
+	{ canonical: 'm/s^2', dimension: 'acceleration', kind: 'linear', toBase: '1' },
+	{ canonical: 'km/h/s', dimension: 'acceleration', kind: 'linear', toBase: ['5', '18'] },
+	{ canonical: 'in/s^2', dimension: 'acceleration', kind: 'linear', toBase: '0.0254' },
+	{ canonical: 'ft/s^2', dimension: 'acceleration', kind: 'linear', toBase: '0.3048' },
+	{ canonical: 'mph/s', dimension: 'acceleration', kind: 'linear', toBase: '0.44704' },
 
 	// Data, base byte.
-	{ canonical: 'bit', dimension: 'data', kind: 'linear', toBase: 0.125 },
-	{ canonical: 'byte', dimension: 'data', kind: 'linear', toBase: 1 },
-	{ canonical: 'kb', dimension: 'data', kind: 'linear', toBase: 1024 },
-	{ canonical: 'mb', dimension: 'data', kind: 'linear', toBase: 1048576 },
-	{ canonical: 'gb', dimension: 'data', kind: 'linear', toBase: 1073741824 },
-	{ canonical: 'tb', dimension: 'data', kind: 'linear', toBase: 1099511627776 },
-	{ canonical: 'pb', dimension: 'data', kind: 'linear', toBase: 1125899906842624 },
-	{ canonical: 'eb', dimension: 'data', kind: 'linear', toBase: 1152921504606847000 },
-	{ canonical: 'kib', dimension: 'data', kind: 'linear', toBase: 1024 },
-	{ canonical: 'mib', dimension: 'data', kind: 'linear', toBase: 1048576 },
-	{ canonical: 'gib', dimension: 'data', kind: 'linear', toBase: 1073741824 },
-	{ canonical: 'tib', dimension: 'data', kind: 'linear', toBase: 1099511627776 },
-	{ canonical: 'pib', dimension: 'data', kind: 'linear', toBase: 1125899906842624 },
-	{ canonical: 'eib', dimension: 'data', kind: 'linear', toBase: 1152921504606847000 },
+	{ canonical: 'bit', dimension: 'data', kind: 'linear', toBase: '0.125' },
+	{ canonical: 'byte', dimension: 'data', kind: 'linear', toBase: '1' },
+	{ canonical: 'kb', dimension: 'data', kind: 'linear', toBase: '1024' },
+	{ canonical: 'mb', dimension: 'data', kind: 'linear', toBase: '1048576' },
+	{ canonical: 'gb', dimension: 'data', kind: 'linear', toBase: '1073741824' },
+	{ canonical: 'tb', dimension: 'data', kind: 'linear', toBase: '1099511627776' },
+	{ canonical: 'pb', dimension: 'data', kind: 'linear', toBase: '1125899906842624' },
+	{ canonical: 'eb', dimension: 'data', kind: 'linear', toBase: '1152921504606846976' },
+	{ canonical: 'kib', dimension: 'data', kind: 'linear', toBase: '1024' },
+	{ canonical: 'mib', dimension: 'data', kind: 'linear', toBase: '1048576' },
+	{ canonical: 'gib', dimension: 'data', kind: 'linear', toBase: '1073741824' },
+	{ canonical: 'tib', dimension: 'data', kind: 'linear', toBase: '1099511627776' },
+	{ canonical: 'pib', dimension: 'data', kind: 'linear', toBase: '1125899906842624' },
+	{ canonical: 'eib', dimension: 'data', kind: 'linear', toBase: '1152921504606846976' },
 
 	// Time, base second.
-	{ canonical: 'ns', dimension: 'time', kind: 'linear', toBase: 1e-9 },
-	{ canonical: 'us', dimension: 'time', kind: 'linear', toBase: 0.000001 },
-	{ canonical: 'ms', dimension: 'time', kind: 'linear', toBase: 0.001 },
-	{ canonical: 's', dimension: 'time', kind: 'linear', toBase: 1 },
-	{ canonical: 'min', dimension: 'time', kind: 'linear', toBase: 60 },
-	{ canonical: 'h', dimension: 'time', kind: 'linear', toBase: 3600 },
-	{ canonical: 'd', dimension: 'time', kind: 'linear', toBase: 86400 },
-	{ canonical: 'wk', dimension: 'time', kind: 'linear', toBase: 604800 },
-	{ canonical: 'yr', dimension: 'time', kind: 'linear', toBase: 31556926 },
+	{ canonical: 'ns', dimension: 'time', kind: 'linear', toBase: '1e-9' },
+	{ canonical: 'us', dimension: 'time', kind: 'linear', toBase: '0.000001' },
+	{ canonical: 'ms', dimension: 'time', kind: 'linear', toBase: '0.001' },
+	{ canonical: 's', dimension: 'time', kind: 'linear', toBase: '1' },
+	{ canonical: 'min', dimension: 'time', kind: 'linear', toBase: '60' },
+	{ canonical: 'h', dimension: 'time', kind: 'linear', toBase: '3600' },
+	{ canonical: 'd', dimension: 'time', kind: 'linear', toBase: '86400' },
+	{ canonical: 'wk', dimension: 'time', kind: 'linear', toBase: '604800' },
+	{ canonical: 'yr', dimension: 'time', kind: 'linear', toBase: '31556926' },
 
 	// Pressure, base pascal.
-	{ canonical: 'pa', dimension: 'pressure', kind: 'linear', toBase: 1 },
-	{ canonical: 'kpa', dimension: 'pressure', kind: 'linear', toBase: 1000 },
-	{ canonical: 'mpa', dimension: 'pressure', kind: 'linear', toBase: 1000000 },
-	{ canonical: 'bar', dimension: 'pressure', kind: 'linear', toBase: 100000 },
-	{ canonical: 'mbar', dimension: 'pressure', kind: 'linear', toBase: 100 },
-	{ canonical: 'atm', dimension: 'pressure', kind: 'linear', toBase: 101325 },
-	{ canonical: 'psi', dimension: 'pressure', kind: 'linear', toBase: 6894.757293168 },
-	{ canonical: 'torr', dimension: 'pressure', kind: 'linear', toBase: 133.32236842105263 },
-	{ canonical: 'mmhg', dimension: 'pressure', kind: 'linear', toBase: 133.322387415 },
+	{ canonical: 'pa', dimension: 'pressure', kind: 'linear', toBase: '1' },
+	{ canonical: 'kpa', dimension: 'pressure', kind: 'linear', toBase: '1000' },
+	{ canonical: 'mpa', dimension: 'pressure', kind: 'linear', toBase: '1000000' },
+	{ canonical: 'bar', dimension: 'pressure', kind: 'linear', toBase: '100000' },
+	{ canonical: 'mbar', dimension: 'pressure', kind: 'linear', toBase: '100' },
+	{ canonical: 'atm', dimension: 'pressure', kind: 'linear', toBase: '101325' },
+	{ canonical: 'psi', dimension: 'pressure', kind: 'linear', toBase: '6894.757293168' },
+	{ canonical: 'torr', dimension: 'pressure', kind: 'linear', toBase: ['101325', '760'] },
+	{ canonical: 'mmhg', dimension: 'pressure', kind: 'linear', toBase: '133.322387415' },
 
 	// Energy, base joule.
-	{ canonical: 'ev', dimension: 'energy', kind: 'linear', toBase: 1.602176634e-19 },
-	{ canonical: 'millijoule', dimension: 'energy', kind: 'linear', toBase: 0.001 },
-	{ canonical: 'j', dimension: 'energy', kind: 'linear', toBase: 1 },
-	{ canonical: 'kj', dimension: 'energy', kind: 'linear', toBase: 1000 },
-	{ canonical: 'mj', dimension: 'energy', kind: 'linear', toBase: 1000000 },
-	{ canonical: 'gj', dimension: 'energy', kind: 'linear', toBase: 1000000000 },
-	{ canonical: 'wh', dimension: 'energy', kind: 'linear', toBase: 3600 },
-	{ canonical: 'kwh', dimension: 'energy', kind: 'linear', toBase: 3600000 },
-	{ canonical: 'cal', dimension: 'energy', kind: 'linear', toBase: 4.184 },
-	{ canonical: 'kcal', dimension: 'energy', kind: 'linear', toBase: 4184 },
-	{ canonical: 'btu', dimension: 'energy', kind: 'linear', toBase: 1055.05585262 },
-	{ canonical: 'ft*lbf', dimension: 'energy', kind: 'linear', toBase: 1.3558179483314004 },
+	{ canonical: 'ev', dimension: 'energy', kind: 'linear', toBase: '1.602176634e-19' },
+	{ canonical: 'millijoule', dimension: 'energy', kind: 'linear', toBase: '0.001' },
+	{ canonical: 'j', dimension: 'energy', kind: 'linear', toBase: '1' },
+	{ canonical: 'kj', dimension: 'energy', kind: 'linear', toBase: '1000' },
+	{ canonical: 'mj', dimension: 'energy', kind: 'linear', toBase: '1000000' },
+	{ canonical: 'gj', dimension: 'energy', kind: 'linear', toBase: '1000000000' },
+	{ canonical: 'wh', dimension: 'energy', kind: 'linear', toBase: '3600' },
+	{ canonical: 'kwh', dimension: 'energy', kind: 'linear', toBase: '3600000' },
+	{ canonical: 'cal', dimension: 'energy', kind: 'linear', toBase: '4.184' },
+	{ canonical: 'kcal', dimension: 'energy', kind: 'linear', toBase: '4184' },
+	{ canonical: 'btu', dimension: 'energy', kind: 'linear', toBase: '1055.05585262' },
+	{ canonical: 'ft*lbf', dimension: 'energy', kind: 'linear', toBase: '1.3558179483314004' },
 
 	// Power, base watt.
-	{ canonical: 'milliwatt', dimension: 'power', kind: 'linear', toBase: 0.001 },
-	{ canonical: 'w', dimension: 'power', kind: 'linear', toBase: 1 },
-	{ canonical: 'kw', dimension: 'power', kind: 'linear', toBase: 1000 },
-	{ canonical: 'mw', dimension: 'power', kind: 'linear', toBase: 1000000 },
-	{ canonical: 'gw', dimension: 'power', kind: 'linear', toBase: 1000000000 },
-	{ canonical: 'hp', dimension: 'power', kind: 'linear', toBase: 745.6998715822702 },
+	{ canonical: 'milliwatt', dimension: 'power', kind: 'linear', toBase: '0.001' },
+	{ canonical: 'w', dimension: 'power', kind: 'linear', toBase: '1' },
+	{ canonical: 'kw', dimension: 'power', kind: 'linear', toBase: '1000' },
+	{ canonical: 'mw', dimension: 'power', kind: 'linear', toBase: '1000000' },
+	{ canonical: 'gw', dimension: 'power', kind: 'linear', toBase: '1000000000' },
+	{ canonical: 'hp', dimension: 'power', kind: 'linear', toBase: '745.6998715822702' },
 ];
 
 const TEMPERATURE_UNITS: AffineUnit[] = [
@@ -251,22 +252,22 @@ const TEMPERATURE_UNITS: AffineUnit[] = [
 		canonical: 'F',
 		dimension: 'temperature',
 		kind: 'affine',
-		toBase: (value) => (value - 32) * 5 / 9,
-		fromBase: (value) => value * 9 / 5 + 32,
+		toBase: (value) => value.minus(32).times(5).dividedBy(9),
+		fromBase: (value) => value.times(9).dividedBy(5).plus(32),
 	},
 	{
 		canonical: 'R',
 		dimension: 'temperature',
 		kind: 'affine',
-		toBase: (value) => (value - 491.67) * 5 / 9,
-		fromBase: (value) => (value + 273.15) * 9 / 5,
+		toBase: (value) => value.minus('491.67').times(5).dividedBy(9),
+		fromBase: (value) => value.plus('273.15').times(9).dividedBy(5),
 	},
 	{
 		canonical: 'K',
 		dimension: 'temperature',
 		kind: 'affine',
-		toBase: (value) => value - 273.15,
-		fromBase: (value) => value + 273.15,
+		toBase: (value) => value.minus('273.15'),
+		fromBase: (value) => value.plus('273.15'),
 	},
 ];
 
@@ -1098,12 +1099,13 @@ export function parseConversion(text: string, settings: ObsidianQuantitiesSettin
 		return null;
 	}
 
-	const input = Number(match[1]);
+	let input: DecimalValue;
+	try { input = new ExactDecimal(match[1]); } catch { return null; }
 	const source = findUnit(match[2]);
 	const materialName = match[3];
 	const target = findUnit(match[4]);
 
-	if (!Number.isFinite(input) || !source || !target) {
+	if (!input.isFinite() || !source || !target) {
 		return null;
 	}
 
@@ -1126,7 +1128,7 @@ export function parseConversion(text: string, settings: ObsidianQuantitiesSettin
 	}
 
 	const output = convertWithDensity(input, source, target, density);
-	if (!Number.isFinite(output)) {
+	if (!output.isFinite()) {
 		return null;
 	}
 
@@ -1140,8 +1142,9 @@ export function diagnoseConversion(text: string, settings: ObsidianQuantitiesSet
 		return null;
 	}
 
-	const input = Number(match[1]);
-	if (!Number.isFinite(input)) {
+	let input: DecimalValue;
+	try { input = new ExactDecimal(match[1]); } catch { return `"${match[1]}" is not a valid number.`; }
+	if (!input.isFinite()) {
 		return `"${match[1]}" is not a valid number.`;
 	}
 
@@ -1249,17 +1252,17 @@ export function evaluateCompatibilityExpression(expression: string, values: Map<
 		const display = formatInlineConversion(conversion, settings);
 		return {
 			kind: 'success' as const,
-			value: { kind: 'quantity' as const, value: conversion.conversion.output, unit: conversion.conversion.target.canonical, dimension: conversion.conversion.target.dimension },
+			value: { kind: 'quantity' as const, value: conversion.conversion.output.toNumber(), exact: conversion.conversion.output.toString(), unit: conversion.conversion.target.canonical, dimension: conversion.conversion.target.dimension },
 			display,
 			consumeTrailingS: display.endsWith('s'),
 		};
 	}
 	const numericDisplay = formatNumericLiteral(expression, settings.precision);
 	if (numericDisplay !== null) {
-		const numericValue = Number(stripArithmeticEquals(expression));
+		const numericValue = new ExactDecimal(stripArithmeticEquals(expression));
 		return {
 			kind: 'success' as const,
-			value: { kind: 'number' as const, value: numericValue, decimalPlaces: decimalPlacesInLiteral(expression) },
+			value: { kind: 'number' as const, value: numericValue.toNumber(), exact: numericValue.isZero() ? '0' : numericValue.toString(), decimalPlaces: decimalPlacesInLiteral(expression) },
 			display: numericDisplay,
 			consumeTrailingS: false,
 		};
@@ -1302,9 +1305,15 @@ function normalizeUnit(unit: string): string {
 		.replace(/\s*\*\s*/g, '*');
 }
 
-function convert(value: number, source: Unit, target: Unit): number {
+function unitFactor(unit: LinearUnit): DecimalValue {
+	return Array.isArray(unit.toBase)
+		? new ExactDecimal(unit.toBase[0]).dividedBy(unit.toBase[1])
+		: new ExactDecimal(unit.toBase as string);
+}
+
+function convert(value: DecimalValue, source: Unit, target: Unit): DecimalValue {
 	if (source.kind === 'linear' && target.kind === 'linear') {
-		return value * source.toBase / target.toBase;
+		return value.times(unitFactor(source)).dividedBy(unitFactor(target));
 	}
 
 	if (source.kind === 'affine' && target.kind === 'affine') {
@@ -1335,45 +1344,45 @@ function findDensity(rawName: string, settings: ObsidianQuantitiesSettings): Den
 	return null;
 }
 
-function densityToBase(density: DensityEntry): number {
+function densityToBase(density: DensityEntry): DecimalValue | null {
 	const slashIdx = density.unit.indexOf('/');
 	if (slashIdx < 0) {
-		return NaN;
+		return null;
 	}
 	const massUnit = findUnit(density.unit.slice(0, slashIdx));
 	const volUnit = findUnit(density.unit.slice(slashIdx + 1));
 	if (!massUnit || !volUnit) {
-		return NaN;
+		return null;
 	}
 	if (massUnit.dimension !== 'mass' || volUnit.dimension !== 'volume') {
-		return NaN;
+		return null;
 	}
 	if (massUnit.kind !== 'linear' || volUnit.kind !== 'linear') {
-		return NaN;
+		return null;
 	}
-	return (density.value * massUnit.toBase) / volUnit.toBase;
+	return new ExactDecimal(density.value.toString()).times(unitFactor(massUnit)).dividedBy(unitFactor(volUnit));
 }
 
-function convertWithDensity(value: number, source: Unit, target: Unit, density: DensityEntry): number {
+function convertWithDensity(value: DecimalValue, source: Unit, target: Unit, density: DensityEntry): DecimalValue {
 	if (source.kind !== 'linear' || target.kind !== 'linear') {
-		return NaN;
+		return new ExactDecimal(NaN);
 	}
 	const densityGramsPerLiter = densityToBase(density);
-	if (!Number.isFinite(densityGramsPerLiter) || densityGramsPerLiter <= 0) {
-		return NaN;
+	if (!densityGramsPerLiter?.isFinite() || densityGramsPerLiter.lessThanOrEqualTo(0)) {
+		return new ExactDecimal(NaN);
 	}
 
 	if (source.dimension === 'volume' && target.dimension === 'mass') {
-		const volumeL = value * source.toBase;
-		const massG = volumeL * densityGramsPerLiter;
-		return massG / target.toBase;
+		const volumeL = value.times(unitFactor(source));
+		const massG = volumeL.times(densityGramsPerLiter);
+		return massG.dividedBy(unitFactor(target));
 	}
 	if (source.dimension === 'mass' && target.dimension === 'volume') {
-		const massG = value * source.toBase;
-		const volumeL = massG / densityGramsPerLiter;
-		return volumeL / target.toBase;
+		const massG = value.times(unitFactor(source));
+		const volumeL = massG.dividedBy(densityGramsPerLiter);
+		return volumeL.dividedBy(unitFactor(target));
 	}
-	return NaN;
+	return new ExactDecimal(NaN);
 }
 
 function formatConversion(conversion: Conversion, precision: number): string {
@@ -1397,23 +1406,23 @@ function formatResult(conversion: Conversion, precision: number): string {
 	return `${formatNumber(conversion.output, precision)} ${formatUnit(conversion.target, conversion.output)}`;
 }
 
-function formatUnit(unit: Unit, value: number): string {
+function formatUnit(unit: Unit, value: DecimalValue): string {
 	const display = UNIT_DISPLAYS[unit.canonical.toLowerCase()];
 	if (!display) {
 		return unit.canonical;
 	}
 
-	const fullName = Math.abs(value) === 1 ? display.singular : display.plural;
+	const fullName = value.abs().equals(1) ? display.singular : display.plural;
 	return `${fullName} (${display.abbr})`;
 }
 
-function formatUnitName(unit: Unit, value: number): string {
+function formatUnitName(unit: Unit, value: DecimalValue): string {
 	const display = UNIT_DISPLAYS[unit.canonical.toLowerCase()];
 	if (!display) {
 		return unit.canonical;
 	}
 
-	return Math.abs(value) === 1 ? display.singular : display.plural;
+	return value.abs().equals(1) ? display.singular : display.plural;
 }
 
 function formatUnitAbbr(unit: Unit): string {
@@ -1439,28 +1448,28 @@ function resolveUnitDisplayForm(canonical: string, settings: ObsidianQuantitiesS
 	return 'name';
 }
 
-function pickUnitForm(unit: Unit, value: number, settings: ObsidianQuantitiesSettings): string {
+function pickUnitForm(unit: Unit, value: DecimalValue, settings: ObsidianQuantitiesSettings): string {
 	return resolveUnitDisplayForm(unit.canonical, settings) === 'abbr'
 		? formatUnitAbbr(unit)
 		: formatUnitName(unit, value);
 }
 
-function formatNumber(value: number, precision: number, minimumDecimalPlaces = 0): string {
-	if (Object.is(value, -0)) {
-		value = 0;
+export function formatNumber(value: number | string | DecimalValue, precision: number, minimumDecimalPlaces = 0): string {
+	const decimal = value instanceof ExactDecimal ? value : new ExactDecimal(value);
+	if (!decimal.isFinite()) return decimal.toString();
+	if (decimal.isZero()) {
+		const zeroPlaces = Math.min(minimumDecimalPlaces, precision);
+		return zeroPlaces > 0 ? `0.${'0'.repeat(zeroPlaces)}` : '0';
 	}
 
 	let effectivePrecision = precision;
-	// A non-zero result must never be presented as zero merely because the
-	// configured decimal-place cap is too small to reveal its first digit.
-	while (value !== 0 && Number(value.toFixed(effectivePrecision)) === 0 && effectivePrecision < 100) {
-		effectivePrecision++;
-	}
-	if (value !== 0 && Number(value.toFixed(effectivePrecision)) === 0) {
-		return value.toExponential(precision);
+	if (decimal.toDecimalPlaces(precision, ExactDecimal.ROUND_HALF_EVEN).isZero()) {
+		const firstSignificantPlace = Math.max(0, -decimal.e);
+		if (firstSignificantPlace > 10) return formatScientific(decimal, precision);
+		effectivePrecision = Math.max(precision, firstSignificantPlace);
 	}
 
-	const formatted = value.toFixed(effectivePrecision);
+	const formatted = decimal.toFixed(effectivePrecision, ExactDecimal.ROUND_HALF_EVEN);
 	let compact = formatted.replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
 	const minimum = Math.min(Math.max(0, minimumDecimalPlaces), effectivePrecision);
 	if (minimum === 0) return compact;
@@ -1471,6 +1480,18 @@ function formatNumber(value: number, precision: number, minimumDecimalPlaces = 0
 	return compact;
 }
 
+function formatScientific(value: DecimalValue, precision: number): string {
+	const [rawMantissa, rawExponent] = value.toExponential(precision, ExactDecimal.ROUND_HALF_EVEN).split('e');
+	const mantissa = rawMantissa.replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
+	const exponent = rawExponent.replace(/^\+/, '');
+	return `${mantissa} × 10${toSuperscript(exponent)}`;
+}
+
+function toSuperscript(value: string): string {
+	const digits: Record<string, string> = { '-': '⁻', '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴', '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹' };
+	return Array.from(value).map((character) => digits[character] ?? character).join('');
+}
+
 function formatNumericLiteral(text: string, precision: number): string | null {
 	const expression = stripArithmeticEquals(stripInlineCodeMarkers(text.trim()));
 	const match = expression.match(/^([+-]?(?:\d+(?:\.(\d*))?|\.(\d+))(?:e([+-]?\d+))?)$/i);
@@ -1478,10 +1499,8 @@ function formatNumericLiteral(text: string, precision: number): string | null {
 		return null;
 	}
 
-	const value = Number(match[1]);
-	if (!Number.isFinite(value)) {
-		return null;
-	}
+	let value: DecimalValue;
+	try { value = new ExactDecimal(match[1]); } catch { return null; }
 
 	const decimalPart = match[2] ?? match[3];
 	const exponent = Number(match[4] ?? 0);
@@ -1489,7 +1508,7 @@ function formatNumericLiteral(text: string, precision: number): string | null {
 	return formatNumber(value, precision, writtenPlaces);
 }
 
-function parseArithmetic(text: string, variables: VariableMap, isExplicit: boolean): number | null {
+function parseArithmetic(text: string, variables: VariableMap, isExplicit: boolean): DecimalValue | null {
 	if (!isExplicit) {
 		return null;
 	}
@@ -1500,7 +1519,7 @@ function parseArithmetic(text: string, variables: VariableMap, isExplicit: boole
 
 	const parser = new ArithmeticParser(expression);
 	const value = parser.parse();
-	return value !== null && Number.isFinite(value) ? value : null;
+	return value !== null && value.isFinite() ? value : null;
 }
 
 function stripArithmeticEquals(text: string): string {
@@ -1527,13 +1546,8 @@ function resolveVariablesInExpression(expression: string, variables: VariableMap
 	return resolved;
 }
 
-function formatNumberForExpression(value: number): string {
-	if (Object.is(value, -0)) {
-		return '0';
-	}
-
-	const formatted = value.toFixed(12);
-	return formatted.replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
+function formatNumberForExpression(value: DecimalValue): string {
+	return value.isZero() ? '0' : value.toString();
 }
 
 function escapeRegExp(value: string): string {
@@ -1545,13 +1559,13 @@ class ArithmeticParser {
 
 	constructor(private readonly input: string) { }
 
-	parse(): number | null {
+	parse(): DecimalValue | null {
 		const value = this.parseExpression();
 		this.skipWhitespace();
 		return value !== null && this.index === this.input.length ? value : null;
 	}
 
-	private parseExpression(): number | null {
+	private parseExpression(): DecimalValue | null {
 		let value = this.parseTerm();
 		if (value === null) {
 			return null;
@@ -1570,11 +1584,11 @@ class ArithmeticParser {
 				return null;
 			}
 
-			value = operator === '+' ? value + rhs : value - rhs;
+			value = operator === '+' ? value.plus(rhs) : value.minus(rhs);
 		}
 	}
 
-	private parseTerm(): number | null {
+	private parseTerm(): DecimalValue | null {
 		let value = this.parsePower();
 		if (value === null) {
 			return null;
@@ -1593,7 +1607,7 @@ class ArithmeticParser {
 					return null;
 				}
 
-				value *= rhs;
+				value = value.times(rhs);
 				continue;
 			}
 
@@ -1603,11 +1617,11 @@ class ArithmeticParser {
 				return null;
 			}
 
-			value = operator === '*' ? value * rhs : value / rhs;
+			value = operator === '*' ? value.times(rhs) : value.dividedBy(rhs);
 		}
 	}
 
-	private parsePower(): number | null {
+	private parsePower(): DecimalValue | null {
 		const base = this.parseUnary();
 		if (base === null) {
 			return null;
@@ -1620,10 +1634,11 @@ class ArithmeticParser {
 
 		this.index++;
 		const exponent = this.parsePower();
-		return exponent === null ? null : Math.pow(base, exponent);
+		if (exponent === null) return null;
+		try { return base.pow(exponent); } catch { return null; }
 	}
 
-	private parseUnary(): number | null {
+	private parseUnary(): DecimalValue | null {
 		this.skipWhitespace();
 		const operator = this.peek();
 		if (operator !== '+' && operator !== '-') {
@@ -1636,10 +1651,10 @@ class ArithmeticParser {
 			return null;
 		}
 
-		return operator === '-' ? -value : value;
+		return operator === '-' ? value.negated() : value;
 	}
 
-	private parsePrimary(): number | null {
+	private parsePrimary(): DecimalValue | null {
 		this.skipWhitespace();
 		if (this.peek() === '(') {
 			this.index++;
@@ -1656,7 +1671,7 @@ class ArithmeticParser {
 		return this.parseNumber();
 	}
 
-	private parseNumber(): number | null {
+	private parseNumber(): DecimalValue | null {
 		this.skipWhitespace();
 		const start = this.index;
 		let sawDigit = false;
@@ -1697,8 +1712,7 @@ class ArithmeticParser {
 			}
 		}
 
-		const value = Number(this.input.slice(start, this.index));
-		return Number.isFinite(value) ? value : null;
+		try { return new ExactDecimal(this.input.slice(start, this.index)); } catch { return null; }
 	}
 
 	private skipWhitespace() {
@@ -1751,7 +1765,7 @@ function collectVariables(text: string, settings: ObsidianQuantitiesSettings): V
 				continue;
 			}
 
-			const value = extractLeadingNumber(inlineEvaluation.text);
+			const value = extractLeadingDecimal(inlineEvaluation.text);
 			if (value !== null) {
 				setVariable(variables, variableName, value);
 			}
@@ -1761,9 +1775,9 @@ function collectVariables(text: string, settings: ObsidianQuantitiesSettings): V
 	return variables;
 }
 
-function setVariable(variables: VariableMap, rawName: string, value: number) {
+function setVariable(variables: VariableMap, rawName: string, value: DecimalValue) {
 	const name = normalizeVariableName(rawName);
-	if (name.length > 0 && Number.isFinite(value)) {
+	if (name.length > 0 && value.isFinite()) {
 		variables.set(name, value);
 	}
 }
@@ -1773,14 +1787,24 @@ function extractAssignmentName(prefix: string): string | null {
 	return match ? match[1] : null;
 }
 
-function extractLeadingNumber(text: string): number | null {
-	const match = text.trim().match(/^-?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?/i);
-	if (!match) {
+function extractLeadingDecimal(text: string): DecimalValue | null {
+	const trimmed = text.trim();
+	const scientific = trimmed.match(/^(-?(?:\d+(?:\.\d*)?|\.\d+))\s*×\s*10([⁻⁰¹²³⁴⁵⁶⁷⁸⁹]+)/u);
+	const ordinary = trimmed.match(/^-?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?/i);
+	let source = ordinary?.[0];
+	if (scientific) source = `${scientific[1]}e${fromSuperscript(scientific[2])}`;
+	if (!source) return null;
+	try {
+		const value = new ExactDecimal(source);
+		return value.isFinite() ? value : null;
+	} catch {
 		return null;
 	}
+}
 
-	const value = Number(match[0]);
-	return Number.isFinite(value) ? value : null;
+function fromSuperscript(value: string): string {
+	const digits: Record<string, string> = { '⁻': '-', '⁰': '0', '¹': '1', '²': '2', '³': '3', '⁴': '4', '⁵': '5', '⁶': '6', '⁷': '7', '⁸': '8', '⁹': '9' };
+	return Array.from(value).map((character) => digits[character] ?? character).join('');
 }
 
 function normalizeVariableName(name: string): string {
@@ -1862,14 +1886,10 @@ function buildInlineCodeDecorations(view: EditorView, plugin: ObsidianQuantities
 async function renderInlineCodeConversions(element: HTMLElement, ctx: MarkdownPostProcessorContext, plugin: ObsidianQuantitiesPlugin) {
 	const codeElements = Array.from(element.querySelectorAll('code'))
 		.filter((codeElement) => !codeElement.closest('pre'));
-	const sectionInfo = ctx.getSectionInfo(element);
-	const sourceText = await getSourceText(ctx, plugin);
-	const sectionStartOffset = sourceText && sectionInfo
-		? getLineStartOffset(sourceText, sectionInfo.lineStart)
-		: null;
-	const sectionEndOffset = sourceText && sectionInfo
-		? getLineStartOffset(sourceText, sectionInfo.lineEnd + 1)
-		: null;
+	const renderSource = await getRenderSource(element, ctx, plugin);
+	const sourceText = renderSource?.text ?? null;
+	const sectionStartOffset = renderSource?.from ?? null;
+	const sectionEndOffset = renderSource?.to ?? null;
 	const evaluationIndex = sourceText ? plugin.evaluateDocument(sourceText) : null;
 	const sectionEntries = evaluationIndex && sectionStartOffset !== null && sectionEndOffset !== null
 		? evaluationIndex.entries().filter(({ source }) => source.from >= sectionStartOffset && source.from < sectionEndOffset)
@@ -1936,12 +1956,68 @@ function concealStructuralMarker(codeElement: HTMLElement): void {
 	}
 }
 
-async function getSourceText(ctx: MarkdownPostProcessorContext, plugin: ObsidianQuantitiesPlugin): Promise<string | null> {
+interface RenderSource {
+	text: string;
+	from: number;
+	to: number;
+}
+
+export async function getRenderSource(element: HTMLElement, ctx: MarkdownPostProcessorContext, plugin: ObsidianQuantitiesPlugin): Promise<RenderSource | null> {
+	const embedSelector = '.internal-embed[src], .internal-embed[data-src]';
+	const embed = element.matches(embedSelector) ? element : element.closest<HTMLElement>(embedSelector);
+	const embedSource = (embed?.getAttribute('src') ?? embed?.getAttribute('data-src'))?.trim();
+	if (embedSource) {
+		const resolved = await resolveEmbeddedRenderSource(embedSource, ctx.sourcePath, plugin);
+		if (resolved) return resolved;
+	}
+
 	const file = plugin.app.vault.getAbstractFileByPath(ctx.sourcePath);
 	if (!(file instanceof TFile)) {
 		return null;
 	}
+	const text = await readVaultFile(file, plugin);
+	if (text === null) return null;
+	const sectionInfo = ctx.getSectionInfo(element);
+	// Obsidian may invoke a postprocessor on a detached transclusion section,
+	// before its `.internal-embed` ancestor is available. In that case the
+	// section belongs to the host's embed line. Resolve that line just as we
+	// would resolve the eventual DOM wrapper so evaluation still uses the full
+	// embedded source note.
+	if (sectionInfo) {
+		const hostSectionText = text.slice(
+			getLineStartOffset(text, sectionInfo.lineStart),
+			getLineStartOffset(text, sectionInfo.lineEnd + 1),
+		);
+		const detachedEmbedSource = embeddedWikiLinkSource(sectionInfo.text) ?? embeddedWikiLinkSource(hostSectionText);
+		if (detachedEmbedSource) {
+			const resolved = await resolveEmbeddedRenderSource(detachedEmbedSource, ctx.sourcePath, plugin);
+			if (resolved) return resolved;
+		}
+	}
+	return sectionInfo
+		? { text, from: getLineStartOffset(text, sectionInfo.lineStart), to: getLineStartOffset(text, sectionInfo.lineEnd + 1) }
+		: { text, from: 0, to: text.length };
+}
 
+async function resolveEmbeddedRenderSource(embedSource: string, sourcePath: string, plugin: ObsidianQuantitiesPlugin): Promise<RenderSource | null> {
+	const link = parseLinktext(embedSource);
+	const embeddedFile = plugin.app.metadataCache.getFirstLinkpathDest(link.path, sourcePath);
+	if (!embeddedFile) return null;
+	const text = await readVaultFile(embeddedFile, plugin);
+	if (text === null) return null;
+	if (!link.subpath) return { text, from: 0, to: text.length };
+	const cache = plugin.app.metadataCache.getFileCache(embeddedFile);
+	const subpath = cache ? resolveSubpath(cache, link.subpath) : null;
+	return subpath
+		? { text, from: subpath.start.offset, to: subpath.end?.offset ?? text.length }
+		: { text, from: 0, to: text.length };
+}
+
+function embeddedWikiLinkSource(text: string): string | null {
+	return text.match(/!\[\[([^\]\n]+)\]\]/u)?.[1]?.trim() ?? null;
+}
+
+async function readVaultFile(file: TFile, plugin: ObsidianQuantitiesPlugin): Promise<string | null> {
 	try {
 		return await plugin.app.vault.cachedRead(file);
 	} catch {

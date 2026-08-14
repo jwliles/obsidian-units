@@ -22,3 +22,8 @@ Decimal negative exponent with arithmetic = `=1.5e-3+1` <!-- expect:value 1.0015
 
 Uppercase exponent = `=1.5E3*2` <!-- expect:value 3000.0 -->
 Bare exponent-like variable = `=e3+1` <!-- expect:error unknown-variable -->
+
+## Exact decimal and compact display
+
+Cancellation = `=0.3-0.2-0.1` <!-- expect:value 0.0 -->
+Tiny decimal = `=2e-12` <!-- expect:value 2 × 10⁻¹² -->

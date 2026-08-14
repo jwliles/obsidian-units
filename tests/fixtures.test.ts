@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert';
 import { readFileSync, readdirSync } from 'node:fs';
-import { DEFAULT_SETTINGS, evaluateCompatibilityExpression } from '../main';
+import { DEFAULT_SETTINGS, evaluateCompatibilityExpression, formatNumber } from '../main';
 import { evaluateDocument } from '../src/document/evaluation-index';
 
 const fixtureFiles = readdirSync('tests')
@@ -26,18 +26,19 @@ for (const file of fixtureFiles) {
 		const commentSource = followingLines[0].includes('<!--')
 			? followingLines[0]
 			: followingLines[1]?.trimStart().startsWith('<!--') ? followingLines[1] : '';
-		const expected = commentSource.match(/<!--\s*expect:(value|error|structure|warning)\s+(.+?)\s*-->/i);
+		const expected = commentSource.match(/<!--\s*expect:(value|empty|error|structure|warning)(?:\s+(.+?))?\s*-->/i);
 		if (!expected) continue;
 
 		assertions++;
 		fileAssertions++;
 		const description = `${file}:${lineAt(source, entry.source.from)} ${entry.source.content}`;
 		const expectation = expected[1].toLowerCase();
-		if (expectation === 'value') {
+		if (expectation === 'value' || expectation === 'empty') {
+			const expectedDisplay = expectation === 'empty' ? '' : expected[2];
 			if (entry.outcome.kind !== 'success') {
-				failures.push(`${description}: expected value ${expected[2]}, got ${describeOutcome(entry.outcome)}`);
-			} else if (entry.outcome.display !== expected[2]) {
-				failures.push(`${description}: expected value ${expected[2]}, got ${entry.outcome.display}`);
+				failures.push(`${description}: expected ${expectation === 'empty' ? 'an empty value' : `value ${expectedDisplay}`}, got ${describeOutcome(entry.outcome)}`);
+			} else if (entry.outcome.display !== expectedDisplay) {
+				failures.push(`${description}: expected value ${expectedDisplay || '<empty>'}, got ${entry.outcome.display || '<empty>'}`);
 			}
 		} else if (expectation === 'structure') {
 			const actual = structures.get(entry.source.from);
@@ -56,7 +57,7 @@ for (const file of fixtureFiles) {
 	assert.ok(fileAssertions > 0, `${file} contains no executable expectations`);
 }
 
-assert.ok(assertions >= 120, `Expected at least 120 fixture assertions, found ${assertions}`);
+assert.ok(assertions >= 200, `Expected at least 200 fixture assertions, found ${assertions}`);
 if (failures.length) {
 	throw new assert.AssertionError({
 		message: `${failures.length} of ${assertions} fixture assertions failed:\n${failures.join('\n')}`,
@@ -79,12 +80,6 @@ function describeOutcome(outcome: ReturnType<ReturnType<typeof evaluateDocument>
 	return 'not-applicable';
 }
 
-function formatFixtureNumber(value: number, minimumDecimalPlaces = 0): string {
-	let display = value.toFixed(4).replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
-	if (minimumDecimalPlaces === 0) return display;
-	const point = display.indexOf('.');
-	if (point < 0) return `${display}.${'0'.repeat(minimumDecimalPlaces)}`;
-	const present = display.length - point - 1;
-	if (present < minimumDecimalPlaces) display += '0'.repeat(minimumDecimalPlaces - present);
-	return display;
+function formatFixtureNumber(value: number | string, minimumDecimalPlaces = 0): string {
+	return formatNumber(value, 4, minimumDecimalPlaces);
 }

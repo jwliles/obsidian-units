@@ -1,7 +1,8 @@
 import { normalizeLabel } from './normalize';
 import { EvaluatedValue } from './types';
+import { DecimalValue, ExactDecimal } from './decimal';
 
-export type ArithmeticOutcome = { kind: 'success'; value: number; decimalPlaces: number } | { kind: 'error'; code: string; message: string };
+export type ArithmeticOutcome = { kind: 'success'; value: number; exact: string; decimalPlaces: number } | { kind: 'error'; code: string; message: string };
 
 export function evaluateArithmetic(source: string, variables: Map<string, EvaluatedValue>, variableLabels: Map<string, string> = new Map()): ArithmeticOutcome {
 	const resolved = resolveVariables(source, variables);
@@ -9,8 +10,9 @@ export function evaluateArithmetic(source: string, variables: Map<string, Evalua
 	const parser = new Parser(resolved.expression);
 	const value = parser.parse();
 	if (value === null) return { kind: 'error', code: 'arithmetic-syntax', message: 'Malformed arithmetic expression.' };
-	if (!Number.isFinite(value)) return { kind: 'error', code: 'non-finite-result', message: 'The expression produced a non-finite result (possibly division by zero).' };
-	return { kind: 'success', value, decimalPlaces: resolved.decimalPlaces };
+	if (!value.isFinite()) return { kind: 'error', code: 'non-finite-result', message: 'The expression produced a non-finite result (possibly division by zero).' };
+	const exact = value.isZero() ? '0' : value.toString();
+	return { kind: 'success', value: Number(exact), exact, decimalPlaces: resolved.decimalPlaces };
 }
 
 function resolveVariables(source: string, variables: Map<string, EvaluatedValue>): { expression: string; unknown?: string; decimalPlaces: number } {
@@ -21,7 +23,7 @@ function resolveVariables(source: string, variables: Map<string, EvaluatedValue>
 		const pattern = name.split(/\s+/).map(escapeRegExp).join('\\s+');
 		expression = expression.replace(new RegExp(`(^|[^\\p{L}\\p{N}_])(${pattern})(?=$|[^\\p{L}\\p{N}_])`, 'giu'), (_m, prefix) => {
 			decimalPlaces = Math.max(decimalPlaces, value.decimalPlaces);
-			return `${prefix}(${value.value})`;
+			return `${prefix}(${value.exact ?? value.value.toString()})`;
 		});
 	}
 	// Exponent markers are part of numeric literals, not variable identifiers.
@@ -87,13 +89,13 @@ function escapeRegExp(value: string): string { return value.replace(/[.*+?^${}()
 class Parser {
 	private index = 0;
 	constructor(private input: string) {}
-	parse(): number | null { const value = this.expression(); this.space(); return value !== null && this.index === this.input.length ? value : null; }
-	private expression(): number | null { let value = this.term(); if (value === null) return null; while (true) { this.space(); const op = this.peek(); if (op !== '+' && op !== '-') return value; this.index++; const rhs = this.term(); if (rhs === null) return null; value = op === '+' ? value + rhs : value - rhs; } }
-	private term(): number | null { let value = this.power(); if (value === null) return null; while (true) { this.space(); const op = this.peek(); if (op !== '*' && op !== '/') { if (op !== '(') return value; const rhs = this.power(); if (rhs === null) return null; value *= rhs; continue; } this.index++; const rhs = this.power(); if (rhs === null) return null; value = op === '*' ? value * rhs : value / rhs; } }
-	private power(): number | null { const value = this.unary(); if (value === null) return null; this.space(); if (this.peek() !== '^') return value; this.index++; const rhs = this.power(); return rhs === null ? null : Math.pow(value, rhs); }
-	private unary(): number | null { this.space(); const op = this.peek(); if (op !== '+' && op !== '-') return this.primary(); this.index++; const value = this.unary(); return value === null ? null : op === '-' ? -value : value; }
-	private primary(): number | null { this.space(); if (this.peek() === '(') { this.index++; const value = this.expression(); this.space(); if (value === null || this.peek() !== ')') return null; this.index++; return value; } return this.number(); }
-	private number(): number | null { this.space(); const match = this.input.slice(this.index).match(/^(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?/i); if (!match) return null; this.index += match[0].length; return Number(match[0]); }
+	parse(): DecimalValue | null { const value = this.expression(); this.space(); return value !== null && this.index === this.input.length ? value : null; }
+	private expression(): DecimalValue | null { let value = this.term(); if (value === null) return null; while (true) { this.space(); const op = this.peek(); if (op !== '+' && op !== '-') return value; this.index++; const rhs = this.term(); if (rhs === null) return null; value = op === '+' ? value.plus(rhs) : value.minus(rhs); } }
+	private term(): DecimalValue | null { let value = this.power(); if (value === null) return null; while (true) { this.space(); const op = this.peek(); if (op !== '*' && op !== '/') { if (op !== '(') return value; const rhs = this.power(); if (rhs === null) return null; value = value.times(rhs); continue; } this.index++; const rhs = this.power(); if (rhs === null) return null; value = op === '*' ? value.times(rhs) : value.dividedBy(rhs); } }
+	private power(): DecimalValue | null { const value = this.unary(); if (value === null) return null; this.space(); if (this.peek() !== '^') return value; this.index++; const rhs = this.power(); if (rhs === null) return null; try { return value.pow(rhs); } catch { return null; } }
+	private unary(): DecimalValue | null { this.space(); const op = this.peek(); if (op !== '+' && op !== '-') return this.primary(); this.index++; const value = this.unary(); return value === null ? null : op === '-' ? value.negated() : value; }
+	private primary(): DecimalValue | null { this.space(); if (this.peek() === '(') { this.index++; const value = this.expression(); this.space(); if (value === null || this.peek() !== ')') return null; this.index++; return value; } return this.number(); }
+	private number(): DecimalValue | null { this.space(); const match = this.input.slice(this.index).match(/^(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?/i); if (!match) return null; this.index += match[0].length; try { return new ExactDecimal(match[0]); } catch { return null; } }
 	private space() { while (/\s/.test(this.peek())) this.index++; }
 	private peek() { return this.input[this.index] ?? ''; }
 }

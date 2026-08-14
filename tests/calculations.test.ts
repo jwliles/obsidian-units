@@ -36,6 +36,9 @@ assert.equal(parseDeclaration('name: = ', '10', 0).kind, 'error');
 assert.equal(parseDeclaration('prose: label = ', '10', 0).kind, 'error');
 assert.equal(parseDeclaration('first = `=1` second = ', '2', 0).kind, 'error');
 
+const exactCancellation = outcomes('Result = `=0.3-0.2-0.1`')[0];
+assert.equal(exactCancellation.kind === 'success' && exactCancellation.value.kind === 'number' ? exactCancellation.value.exact : 'error', '0');
+
 // Aggregate grammar.
 assert.equal(parseAggregate('sum:ex{ob,ls}{!late}').kind, 'success');
 assert.equal(parseAggregate('median:ex').kind, 'success');

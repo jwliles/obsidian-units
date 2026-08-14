@@ -13,8 +13,8 @@ id:
 
 # august-projections-stripped
 
-Regression note derived from `august-projections.md` with every manual period
-letter (`:a` through `:d`) removed. Under the selected semantics, each
+Regression note derived from an earlier projection ledger with every manual
+period letter (`:a` through `:d`) removed. Under the selected semantics, each
 `sum@ex` reads and closes that period's local expense accumulation. The four
 period totals must be 489.79, 453.36, 138.62, and 134.46. The final global
 `sum:ex` is 1216.23, while the final local read repeats the most recently

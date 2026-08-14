@@ -22,7 +22,7 @@ Total Expenses = `=sum:ex`
 Grocery Expenses = `=sum:ex{gr}`
 ```
 
-In Live Preview and Reading View, the inline expressions render as their results. In Source mode, they remain ordinary Markdown text.
+In Live Preview and Reading View, the inline expressions render as their results. In Source Mode, they remain ordinary Markdown text.
 
 The marker is intentional. Ordinary inline code such as `` `npm test` `` is never treated as a calculation.
 
@@ -59,7 +59,12 @@ Obsidian Quantities renders calculations in:
 - Live Preview
 - Reading View
 
-Source mode always shows the Markdown source.
+Embedded notes, headings, and blocks are evaluated in the context of their
+source note. Declarations preceding an embedded heading remain available to
+that heading, while variables in the host note do not alter the transcluded
+result.
+
+Source Mode always shows the Markdown source.
 
 In Live Preview, placing the cursor in a calculation reveals its source so it can be edited. Its rendered result and diagnostic are temporarily suppressed while the cursor intersects that code span.
 
@@ -69,8 +74,9 @@ valid regional `top` and `bottom` markers. For example,
 carrying a warning or error is shown as that diagnostic rather than concealed.
 
 This cleanup is strictly presentational. It does not modify Markdown source,
-parsing, evaluation, or membership. Source Mode and Live Preview retain the
-complete declaration and structural syntax.
+parsing, evaluation, or membership. Source Mode exposes the complete syntax
+continuously. Live Preview follows Obsidian's normal render/reveal behavior and
+exposes calculation source when the cursor enters it.
 If a concealed structural marker was the only content in its paragraph or list
 item, Reading View also removes that empty presentation container.
 
@@ -476,9 +482,16 @@ The base group must exist. A filter sigil does not need a separate declaration; 
 
 ## Evaluation order and precision
 
-The note is evaluated in document order. Each expression can see only successful declarations and group entries above it. Reading View and Live Preview share the same document-level evaluation model.
+The note is evaluated in document order. Each expression can see only successful declarations and group entries above it. Reading View, Live Preview, and transclusions share the same document-level evaluation model.
 
-Numeric literals retain their written decimal scale where possible. Variables preserve their scale. Arithmetic and aggregate output preserve useful input scale up to the configured decimal precision. A finite non-zero result is never rendered as zero: when the configured precision would show only zeros, Quantities extends the display just far enough to reveal the first significant digit. `count` is always an integer.
+Quantities parses decimal literals and unit factors as decimal values rather
+than binary floating-point numbers. Evaluation uses a 40-significant-digit,
+half-even decimal context. Ordinary financial-scale arithmetic therefore avoids
+binary floating-point residue. Results that exceed that context, including
+non-terminating division and non-integer powers, are rounded explicitly. Exact
+zero is always presented as unsigned zero.
+
+Numeric literals retain their written decimal scale where possible. Variables preserve their scale. Arithmetic and aggregate output preserve useful input scale up to the configured decimal precision. A finite non-zero result is never rendered as zero: when the configured precision would show only zeros, Quantities extends the display just far enough to reveal the first significant digit. If that digit would occur beyond ten decimal places, Quantities uses compact rendered scientific notation such as `1.5 × 10⁻¹²`. This shared formatting rule also applies to unit and density conversions. `count` is always an integer.
 
 Change the normal maximum displayed decimal places with **Decimal precision** in plugin settings. The allowed range is 0–10 and the default is 4. The non-zero safety rule may extend a result beyond that limit. Trailing zero behavior is influenced by the source values and operation rather than every result being forced to a fixed width.
 
@@ -520,7 +533,7 @@ The calculator ribbon icon runs the current-line unit conversion action.
 
 ### Decimal precision
 
-Sets the normal maximum displayed decimal places from 0 through 10. Default: 4. Quantities may exceed this limit when necessary to prevent a non-zero value from appearing to be zero.
+Sets the normal maximum displayed decimal places from 0 through 10. Default: 4. Quantities may exceed this limit when necessary to prevent a non-zero value from appearing to be zero, or switch to scientific notation when more than ten fixed decimal places would be required.
 
 ### Expression marker
 
@@ -600,7 +613,7 @@ Obsidian Quantities reports calculation errors at the expression rather than sil
 - unknown local accumulations
 - invalid or mixed filter clauses
 - empty `avg`, `median`, `min`, or `max`
-- attempts to aggregate unit-bearing values
+- attempts to include unit-bearing or text values in numeric aggregates
 - attempts to attach aggregate results to groups
 
 If an aggregate unexpectedly reports an unknown group, check that at least one successful qualified declaration occurs above it and uses the active marker.
@@ -637,8 +650,12 @@ Qualified declaration   Name:group:other = `=expression`
 Global aggregate        `=sum:group`
 Local aggregate         `=sum@group`
 Regional top marker     `=top`
+Named region marker     `=top:period 1`
 Regional bottom marker  `=bottom`
 Regional aggregate      `=sum:>`
+Named region aggregate  `=sum:>period 1`
+Regional result collect `=sum:>[]`
+Contributor list        `=list:group`
 Positive filter         `=sum:group{a,b}`
 Negative filter         `=sum:group{!a,!b}`
 Combined filters        `=sum:group{a,b}{!c}`
@@ -650,11 +667,13 @@ Display mode            `=5 ft to cm | value`
 - Evaluation is note-local; variables and groups do not cross file boundaries.
 - Evaluation is top-down; forward references are unsupported.
 - One declaration is recognized per line.
-- Aggregation is limited to dimensionless numeric values.
+- Numeric aggregation is limited to dimensionless numeric values; `list` may
+  select declarations of any value type because it returns their labels.
 - Recursive or order-sensitive aggregate membership is unsupported.
 - Local accumulations expose only the active or most recently closed accumulation.
 - A successful `@` aggregate closes its queried local accumulation after evaluation.
-- Regional reads expose only the active or latest completed region.
+- Unnamed regional reads expose the active or latest completed region. Named
+  completed regions are readable through `:>name`.
 - Headings and other Markdown structure have no semantic role.
 - The marker migration command works on the active file, not the entire vault.
 - Plugin settings, including a customized marker, must be synchronized separately from note content.
