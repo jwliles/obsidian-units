@@ -1,9 +1,9 @@
 {
-	"id": "obsidian-units",
-	"name": "Obsidian Units",
-	"version": "1.0.0",
-	"minAppVersion": "0.15.0",
-	"description": "Soulver-style inline unit conversions for Obsidian notes.",
+	"id": "obsidian-quantities",
+	"name": "Obsidian Quantities",
+	"version": "0.6.0",
+	"minAppVersion": "1.13.0",
+	"description": "Calculate with quantities, variables, units, and scoped aggregates directly in your notes.",
 	"author": "jwl",
 	"isDesktopOnly": false
 }

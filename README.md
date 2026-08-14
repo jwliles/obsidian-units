@@ -1,169 +1,188 @@
-# Obsidian Units
+# Obsidian Quantities
 
-Soulver-style inline unit conversions for Obsidian notes.
+Obsidian Quantities is a calculation language that lives naturally inside your
+notes. It began with unit conversion, grew into a practical calculator for
+recipes and everyday quantities, and now supports variables and scoped
+aggregation for ledger-like, Soulver-style calculations. Markdown remains
+readable source: only explicitly marked inline code belongs to the plugin, and
+headings or layout never acquire hidden calculation meaning.
 
-## Usage
+```markdown
+Trip distance: `=5 mi to km`
+Cost per mile = `=42.50 / 18`
 
-Wrap a conversion expression in inline code to show the result automatically:
+CAC:ex = `=350.00`
+OG&E:ex = `=200.00`
+Walmart:ex:gr = `=100.00`
 
-```text
-I need `33 meters to feet` of lumber.
+Total Expenses = `=sum:ex`
+Groceries = `=sum:ex{gr}`
 ```
 
-In Reading View and Live Preview, Obsidian Units renders the calculated result after the inline code without changing the note text.
+The default `` `=` `` prefix is configurable, so users can avoid inline-query collisions with Dataview or another plugin. Obsidian Quantities only evaluates inline code using the active marker; ordinary inline code remains untouched.
 
-If the surrounding sentence already supplies the unit, add `| value`:
+This README is the short tour. The [manual](MANUAL.md) is the complete user
+guide, [semantics](SEMANTICS.md) defines the language precisely, and the
+[design record](DESIGN_RECORD.md) explains why its major rules were chosen.
+[Future ideas](FUTURE_IDEAS.md) are unimplemented proposals; confirmed
+implementation problems are tracked separately in [DEFECTS.md](DEFECTS.md).
 
-```text
-I need `3 kg to pound | value` pounds of soil.
+## Installation
+
+Obsidian Quantities is currently installed manually:
+
+1. Download or build `main.js`, `manifest.json`, and `styles.css`.
+2. Place them in `<vault>/.obsidian/plugins/obsidian-quantities/`.
+3. Reload Obsidian and enable **Obsidian Quantities** under **Settings → Community plugins**.
+
+For development, clone the repository directly into that plugin directory, run `npm install`, then run `npm run build`.
+
+## Highlights
+
+- Converts length, area, mass, volume, speed, acceleration, data, time, pressure, energy, power, and temperature.
+- Converts between mass and volume using configurable material densities.
+- Evaluates arithmetic with variables, parentheses, exponents, scientific notation, and implicit multiplication.
+- Evaluates declarations from top to bottom with clear unknown-variable and forward-reference errors.
+- Aggregates successful declarations with `sum`, `count`, `avg`, `median`, `min`, and `max`, or displays contributors with `list`.
+- Filters groups with OR, AND, and exclusion clauses.
+- Closes local accumulations explicitly when an `@` aggregate reads them.
+- Aggregates declarations between balanced `top` and `bottom` regional markers.
+- Reports malformed expressions and unknown sigils instead of silently returning zero.
+- Renders in both Live Preview and Reading View while revealing source at the cursor.
+- Provides commands for plain-text conversion, result insertion, rendering control, and marker migration.
+
+## Core syntax
+
+### Conversions and arithmetic
+
+```markdown
+`=5 ft to cm`
+`=30 ml of maple syrup to g`
+`=(12.50 + 7.25) * 2`
 ```
 
-Inline render modes:
+The conversion separators `to`, `as`, `in`, and `->` are supported. Add `| value`, `| unit`, or `| result` to control the displayed portion.
 
-- `33 meters to feet` renders the value and unit.
-- `33 meters to feet | value` renders only the value.
-- `33 meters to feet | unit` renders only the target unit name.
+### Variables and groups
 
-For editors that auto-pair backticks, a trailing plural `s` after the inline code is tolerated:
+```markdown
+Budget = `=1000`
+CAC:ex:hosting = `=350`
+Power:ex:utilities = `=200`
 
-```text
-`33 ounces to gram`s
+Remaining = `=Budget - sum:ex`
+Utilities = `=sum:ex{utilities}`
 ```
 
-renders as `935.5349 grams`, not `935.5349 gramss`.
+A repeated label updates the variable to its latest successful value. Every
+declaration also joins its implicit label history, while sigils add explicit
+cross-cutting memberships. The declaration `CAC:ex` is therefore available to
+both `sum:cac` and `sum:ex` without copying or double-counting the record.
 
-In Live Preview, Obsidian Units keeps the inline code editable while your cursor is inside it, so auto-paired backticks do not prevent you from finishing a target unit or adding `| value`.
-You can also type the target unit in singular form; the rendered result uses the target value to choose singular or plural output.
+### Local accumulation
 
-Inline arithmetic is also supported:
+```markdown
+Rent:ex = `=800`
+Power:ex = `=150`
+First period = `=sum@ex`
 
-```text
-`10/2`
-`10 / 2`
-`10 / 2 =`
-`(10 + 2) / 3`
-`2^8`
+Groceries:ex = `=200`
+Fuel:ex = `=90`
+Second period = `=sum@ex`
 ```
 
-Inline arithmetic can reference numeric labels from earlier lines. The context is parsed top-to-bottom; later assignments override earlier ones from that point onward.
+The first total is 950 and closes the local `ex` accumulation. The next
+`ex` declaration opens a fresh one, so the second total is 290. A single-colon
+`sum:ex` still returns the note-wide total, 1240. Markdown structure never
+opens or closes scope.
 
-```text
-oldPay = `940`
-oldCPI = `290`
-newCPI = `330`
-newPay = `oldPay (newCPI / oldCPI)`
+### Regional aggregation
 
-oldPay = `1000`
-newerPay = `oldPay (newCPI / oldCPI)`
+```markdown
+`=top`
+A = `=10`
+B = `=20`
+Running = `=sum:>`
+`=bottom`
+
+Final = `=sum:>`
 ```
 
-The labels above are available by name inside later inline arithmetic expressions. Earlier results are not recalculated from later assignments.
+`sum:>` reads the active region, or the latest completed region after
+`bottom`. Reads do not close a region. The `top` and `bottom` names are reserved
+for regional structure. Reading View conceals these markers and declaration
+sigils as calculation metadata; Source Mode and Live Preview retain them.
 
-## Performance Note
+Name a region when its positional member set must be queried later:
 
-Variable references are currently resolved by scanning earlier note content for each inline expression. This is simple and works well for typical notes, but large calculation-heavy documents should eventually use a per-render-pass top-down context cache.
+```markdown
+`=top:pay 1`
+A = `=10`
+B = `=20`
+`=bottom`
 
-You can also write a conversion expression, place the cursor on that line, and run **Obsidian Units: Convert units in selection or current line** from the command palette.
-
-Examples:
-
-```text
-5 ft to cm
-2 cups to ml
-180 lb to kg
-72 F to C
-55 mph to km/h
-10 MiB to MB
+Total = `=sum:>pay 1`
 ```
 
-The command replaces the expression with:
+Within a summary region, `sum:>[]` sums declarations that are themselves pure
+`sum` results; the same form works for the other numeric functions. Use
+`list:group`, `list@group`, or `list:>` to display contributing labels.
 
-```text
-5 ft = 152.4 cm
+Aggregate targets end when arithmetic begins, so compact expressions work:
+
+```markdown
+Remaining = `=Budget-sum:ex`
+Projected = `=sum:ex+25`
 ```
 
-You can also select an expression inside a larger line and convert only the selection.
+## Expression markers and plugin compatibility
+
+The marker defaults to `=` and can be changed in plugin settings. If it is changed to `~`, expressions must begin with `~`:
+
+```markdown
+`~5 ft to cm`
+Total = `~sum:ex`
+```
+
+Old-marker declarations produce a helpful diagnostic. Run **Update Quantities markers in current file** to migrate recognized declarations, aggregates, and conversions in the active note. Ambiguous standalone arithmetic is intentionally not rewritten.
+
+Custom markers are a practical way to avoid an inline syntax collision, but the setting must be synchronized across devices for notes to remain portable.
 
 ## Commands
 
-- **Convert units in selection or current line** replaces the selected expression, or the current line if there is no selection.
-- **Insert unit conversion result only** inserts only the result at the cursor or over the current selection.
+- **Convert units in selection or current line** replaces plain conversion text with an equation-style result.
+- **Insert unit conversion result only** replaces a conversion with only its formatted result.
+- **Toggle rendered calculations in active editor** toggles calculation rendering in the active editor.
+- **Update Quantities markers in current file** migrates recognized expressions from the previous marker to the active marker.
 
-## Supported Categories
+The calculator ribbon icon also converts the current line.
 
-- Length
-- Area
-- Mass
-- Volume
-- Speed
-- Acceleration
-- Data
-- Time
-- Pressure
-- Energy
-- Power
-- Temperature
+## Settings
 
-The `conversions.tsv` file is a planning/reference list for future category expansion. Runtime conversion is handled by TypeScript unit tables that convert through one base unit per category.
+Obsidian Quantities provides settings for decimal precision, the expression marker, Live Preview rendering, per-unit display style, and material densities. See the [settings reference](MANUAL.md#settings) for exact behavior.
 
-## Material densities (mass ↔ volume)
-
-Mass and volume are different dimensions, so a conversion like `1 tsp to g` is incomplete — the answer depends on what's in the teaspoon. Once you teach the plugin a material's density, expressions like the following work in either direction:
-
-```text
-`1 tsp of maple syrup to g`     → 6.7503 grams
-`100 g of maple syrup to ml`    → 72.993 milliliters
-```
-
-The keyword `of <material>` appears between the source unit and `to`/`as`/`in`/`->`. The material name can contain spaces and is matched case-insensitively. Mismatched dimensions other than mass ↔ volume are still rejected (the plugin does not bridge volume → length, etc.).
-
-### Adding a density via the UI
-
-In **Settings → Obsidian Units → Material densities**, click **Add density**. The modal collects three fields:
-
-- **Material name** — how you'll refer to the material in expressions.
-- **Density value** — the numeric density.
-- **Density unit** — pick from `g/ml`, `kg/m^3`, `lb/ft^3`, or `oz/fl oz`.
-
-Edit or delete existing entries from the same screen. Changes take effect immediately in open Live Preview panes.
-
-### Hand-editing the data file
-
-Densities are persisted in the plugin's `data.json` (alongside other settings). The shape is:
+Material densities are stored with the rest of the plugin settings in `data.json`:
 
 ```json
 {
   "densities": [
-    { "name": "maple syrup", "value": 1.37, "unit": "g/ml" },
-    { "name": "olive oil",   "value": 0.91, "unit": "g/ml" }
+    { "name": "maple syrup", "value": 1.37, "unit": "g/ml" }
   ]
 }
 ```
 
-Reference values (for copying):
+## Errors are visible
 
-| Material         | Density (g/mL) |
-| ---------------- | -------------- |
-| Water            | 1.00           |
-| Whole milk       | 1.03           |
-| Butter           | 0.91           |
-| All-purpose flour (sifted) | 0.53 |
-| Granulated sugar | 0.85           |
-| Honey            | 1.42           |
-| Maple syrup      | 1.37           |
-| Olive oil        | 0.91           |
-
-Flour density varies a lot with packing — adjust to your own measurement.
+Unknown variables, groups, local accumulations, and regions are errors. So are incorrect markers, invalid conversions, division by zero, malformed filters, empty `avg`/`median`/`min`/`max`, and attempts to aggregate unit-bearing quantities. Failed declarations do not enter variables or groups and do not silently contribute zero.
 
 ## Development
 
 ```bash
 npm install
-npm run dev
-```
-
-For a production build:
-
-```bash
+npm test
 npm run build
 ```
+
+The language is specified in [SEMANTICS.md](SEMANTICS.md). Design rationale
+lives in [DESIGN_RECORD.md](DESIGN_RECORD.md); neither document is a second
+user manual.

@@ -1,32 +1,37 @@
-.obsidian-units-result {
+.obsidian-quantities-result {
 	color: var(--text-muted);
 	font-variant-numeric: tabular-nums;
 	white-space: nowrap;
 }
 
-.obsidian-units-error {
+.obsidian-quantities-error {
 	color: var(--text-error);
 	font-variant-numeric: tabular-nums;
 }
 
-.cm-obsidian-units-result {
+.obsidian-quantities-warning {
+	color: var(--text-warning);
+	font-variant-numeric: tabular-nums;
+}
+
+.cm-obsidian-quantities-result {
 	padding-inline-start: 0.25em;
 }
 
-.obsidian-units-override-search {
+.obsidian-quantities-override-search {
 	width: 100%;
 	margin-bottom: 0.5em;
 }
 
-.obsidian-units-override-results,
-.obsidian-units-override-list {
+.obsidian-quantities-override-results,
+.obsidian-quantities-override-list {
 	display: flex;
 	flex-direction: column;
 	gap: 0.25em;
 	margin-bottom: 1em;
 }
 
-.obsidian-units-override-row {
+.obsidian-quantities-override-row {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
@@ -34,24 +39,24 @@
 	padding: 0.25em 0;
 }
 
-.obsidian-units-override-label {
+.obsidian-quantities-override-label {
 	flex: 1;
 	overflow: hidden;
 	text-overflow: ellipsis;
 }
 
-.obsidian-units-override-empty {
+.obsidian-quantities-override-empty {
 	color: var(--text-muted);
 	font-style: italic;
 }
 
-.obsidian-units-density-list {
+.obsidian-quantities-density-list {
 	display: flex;
 	flex-direction: column;
 	gap: 0.25em;
 	margin-bottom: 0.75em;
 }
 
-.obsidian-units-density-add {
+.obsidian-quantities-density-add {
 	margin-bottom: 1em;
 }
