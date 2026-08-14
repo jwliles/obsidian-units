@@ -39,6 +39,18 @@ Variable lookup and aggregation remain distinct operations: a variable returns
 the latest successful record for its label, while an aggregate retains every
 selected preceding record.
 
+Numeric evaluation uses canonical decimal strings and a 40-significant-digit,
+half-even context for all operations. Native JavaScript numbers are
+compatibility shadows only and cannot feed later calculations. Presentation is
+separate: the configured decimal precision is the normal fixed-notation cap,
+non-zero values cannot render as zero, and values needing more than ten decimal
+places use typographic scientific notation. The same formatter serves scalar,
+aggregate, and conversion results.
+
+Markdown transclusions are evaluated from the complete embedded source file,
+then narrowed to the embedded heading or block for rendering. The host note's
+variable state never enters the embedded evaluation.
+
 ## Scope
 
 The August projections ledger establishes the required behavior. Several
@@ -110,8 +122,9 @@ language guarantee.
 Live Preview and Reading View share the same document evaluation model. Reading
 View conceals declaration sigils and valid `top` and `bottom` markers because
 they carry calculation metadata rather than prose or values. This cleanup is
-strictly presentational: Source Mode and Live Preview retain complete syntax,
-the Markdown is never rewritten, and diagnostics remain visible.
+strictly presentational: Source Mode exposes complete syntax continuously,
+Live Preview follows Obsidian's normal render/reveal behavior, the Markdown is
+never rewritten, and diagnostics remain visible.
 
 ## Aggregate spelling and boundaries
 

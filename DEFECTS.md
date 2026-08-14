@@ -53,7 +53,8 @@ respectively.
 but presenting a non-zero result as zero is unsafe. Resolved in 0.6.0: the
 configured precision remains the normal cap, but rendering extends just far
 enough to expose the first significant digit whenever rounding would otherwise
-show only zeros.
+show only zeros. Values whose first significant digit lies beyond ten decimal
+places now use compact scientific notation; this also applies to conversions.
 
 **`=2*e-3` and `=e` reporting "Unknown variable e."** Correct behavior. `e` has no special meaning outside the `<digits>e<digits>` adjacency; used as a bare identifier, it is unresolved like any other undeclared label.
 

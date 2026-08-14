@@ -7,6 +7,7 @@ await build({
 	bundle: true,
 	platform: 'node',
 	format: 'esm',
+	target: 'es2022',
 	outdir,
 	plugins: [{
 		name: 'obsidian-test-stubs',
@@ -18,6 +19,7 @@ await build({
 	}],
 });
 await import(pathToFileURL(`${outdir}/calculations.test.js`).href);
-await import(pathToFileURL(`${outdir}/compatibility.test.js`).href);
+const compatibilityTests = await import(pathToFileURL(`${outdir}/compatibility.test.js`).href);
+await compatibilityTests.compatibilityTestsComplete;
 await import(pathToFileURL(`${outdir}/fixtures.test.js`).href);
 await import(pathToFileURL(`${outdir}/metadata.test.js`).href);
