@@ -1,9 +1,4 @@
-# vscode
-.vscode 
-
-# Intellij
-*.iml
-.idea
+.codex
 
 # npm
 node_modules
@@ -18,5 +13,4 @@ main.js
 # obsidian
 data.json
 
-# Exclude macOS Finder (System Explorer) View States
-.DS_Store
+*.sublime-workspace

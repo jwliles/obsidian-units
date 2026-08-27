@@ -1,15 +1,20 @@
-import { ExpressionParseOutcome } from './ast';
-import { findAggregateOccurrences, parseAggregate } from './aggregate';
+import { ExpressionParseOutcome } from "./ast";
+import { findAggregateOccurrences, parseAggregate } from "./aggregate";
 
 export function parseExpression(source: string): ExpressionParseOutcome {
 	const aggregate = parseAggregate(source);
 	const embedded = findAggregateOccurrences(source);
-	if (aggregate.kind === 'error' && !embedded.length) return { kind: 'error', code: aggregate.code ?? 'aggregate-syntax', message: aggregate.message };
-	if (aggregate.kind === 'success') {
+	if (aggregate.kind === "error" && !embedded.length)
 		return {
-			kind: 'success',
+			kind: "error",
+			code: aggregate.code ?? "aggregate-syntax",
+			message: aggregate.message,
+		};
+	if (aggregate.kind === "success") {
+		return {
+			kind: "success",
 			node: {
-				kind: 'aggregate',
+				kind: "aggregate",
 				function: aggregate.node.fn,
 				scope: aggregate.node.scope,
 				group: aggregate.node.group,
@@ -19,5 +24,8 @@ export function parseExpression(source: string): ExpressionParseOutcome {
 			},
 		};
 	}
-	return { kind: 'success', node: { kind: 'scalar', source, aggregates: embedded } };
+	return {
+		kind: "success",
+		node: { kind: "scalar", source, aggregates: embedded },
+	};
 }

@@ -13,7 +13,9 @@ export function scanInlineCode(source: string): InlineCodeSpan[] {
 
 	for (const lineWithBreak of source.match(/[^\n]*(?:\n|$)/g) ?? []) {
 		if (!lineWithBreak) continue;
-		const line = lineWithBreak.endsWith('\n') ? lineWithBreak.slice(0, -1) : lineWithBreak;
+		const line = lineWithBreak.endsWith("\n")
+			? lineWithBreak.slice(0, -1)
+			: lineWithBreak;
 		const fenceMatch = line.match(/^\s*(`{3,}|~{3,})/);
 		if (!inComment && fenceMatch) {
 			const candidate = fenceMatch[1][0];
@@ -30,27 +32,31 @@ export function scanInlineCode(source: string): InlineCodeSpan[] {
 		let index = 0;
 		while (index < line.length) {
 			if (inComment) {
-				const end = line.indexOf('-->', index);
+				const end = line.indexOf("-->", index);
 				if (end < 0) break;
 				inComment = false;
 				index = end + 3;
 				continue;
 			}
-			const comment = line.indexOf('<!--', index);
-			const tick = line.indexOf('`', index);
+			const comment = line.indexOf("<!--", index);
+			const tick = line.indexOf("`", index);
 			if (comment >= 0 && (tick < 0 || comment < tick)) {
 				inComment = true;
 				index = comment + 4;
 				continue;
 			}
 			if (tick < 0) break;
-			if (line[tick + 1] === '`' || (tick > 0 && line[tick - 1] === '`')) {
+			if (line[tick + 1] === "`" || (tick > 0 && line[tick - 1] === "`")) {
 				index = tick + 1;
 				continue;
 			}
-			const end = line.indexOf('`', tick + 1);
+			const end = line.indexOf("`", tick + 1);
 			if (end < 0) break;
-			spans.push({ from: offset + tick, to: offset + end + 1, content: line.slice(tick + 1, end) });
+			spans.push({
+				from: offset + tick,
+				to: offset + end + 1,
+				content: line.slice(tick + 1, end),
+			});
 			index = end + 1;
 		}
 		offset += lineWithBreak.length;

@@ -5,9 +5,22 @@ export interface ValueProvenance {
 }
 
 export type EvaluatedValue =
-	| { kind: 'number'; value: number; exact?: string; decimalPlaces: number; provenance?: ValueProvenance }
-	| { kind: 'quantity'; value: number; exact?: string; unit: string; dimension: string; provenance?: ValueProvenance }
-	| { kind: 'text'; value: string; provenance?: ValueProvenance };
+	| {
+			kind: "number";
+			value: number;
+			exact?: string;
+			decimalPlaces: number;
+			provenance?: ValueProvenance;
+	  }
+	| {
+			kind: "quantity";
+			value: number;
+			exact?: string;
+			unit: string;
+			dimension: string;
+			provenance?: ValueProvenance;
+	  }
+	| { kind: "text"; value: string; provenance?: ValueProvenance };
 
 export interface EvaluationDiagnostic {
 	code: string;
@@ -16,9 +29,14 @@ export interface EvaluationDiagnostic {
 }
 
 export type EvaluationOutcome =
-	| { kind: 'success'; value: EvaluatedValue; display: string; consumeTrailingS?: boolean }
-	| { kind: 'error'; diagnostic: EvaluationDiagnostic }
-	| { kind: 'not-applicable' };
+	| {
+			kind: "success";
+			value: EvaluatedValue;
+			display: string;
+			consumeTrailingS?: boolean;
+	  }
+	| { kind: "error"; diagnostic: EvaluationDiagnostic }
+	| { kind: "not-applicable" };
 
 export interface Declaration {
 	label: string;
@@ -36,7 +54,7 @@ export interface EvaluatedDeclaration {
 	groups: string[];
 	localAccumulationIds: string[];
 	containsAggregate: boolean;
-	rootAggregateFunction?: import('./aggregate').AggregateFunction;
+	rootAggregateFunction?: import("./aggregate").AggregateFunction;
 	aggregateResultCollection: boolean;
 	sourceOffset: number;
 }
@@ -44,7 +62,7 @@ export interface EvaluatedDeclaration {
 export interface RegionalAccumulation {
 	id: string;
 	ordinal: number;
-	status: 'active' | 'completed';
+	status: "active" | "completed";
 	members: EvaluatedDeclaration[];
 	openedAt: number;
 	closedAt?: number;
@@ -56,7 +74,7 @@ export interface LocalAccumulation {
 	id: string;
 	group: string;
 	ordinal: number;
-	status: 'active' | 'completed';
+	status: "active" | "completed";
 	members: EvaluatedDeclaration[];
 	openedAt: number;
 	closedAt?: number;
@@ -96,7 +114,15 @@ export interface InlineSource {
 export interface DocumentEvaluationIndex {
 	outcomeAt(sourceOffset: number): EvaluationOutcome | undefined;
 	declarationAt(sourceOffset: number): Declaration | undefined;
-	entries(): ReadonlyArray<{ source: InlineSource; outcome: EvaluationOutcome }>;
-	structures(): ReadonlyArray<{ source: InlineSource; node: import('./ast').StructuralNode }>;
-	diagnostics(): ReadonlyArray<EvaluationDiagnostic & { severity: 'warning' | 'error' }>;
+	entries(): ReadonlyArray<{
+		source: InlineSource;
+		outcome: EvaluationOutcome;
+	}>;
+	structures(): ReadonlyArray<{
+		source: InlineSource;
+		node: import("./ast").StructuralNode;
+	}>;
+	diagnostics(): ReadonlyArray<
+		EvaluationDiagnostic & { severity: "warning" | "error" }
+	>;
 }

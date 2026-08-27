@@ -1,4 +1,4 @@
-import Decimal from 'decimal.js';
+import Decimal from "decimal.js";
 
 // Keep evaluation out of binary floating point and make every operation use a
 // documented, deterministic precision and rounding policy.
@@ -9,6 +9,8 @@ export const ExactDecimal = Decimal.clone({
 
 export type DecimalValue = InstanceType<typeof ExactDecimal>;
 
-export function decimalFrom(value: string | number | DecimalValue): DecimalValue {
+export function decimalFrom(
+	value: string | number | DecimalValue,
+): DecimalValue {
 	return value instanceof ExactDecimal ? value : new ExactDecimal(value);
 }

@@ -1,0 +1,17 @@
+{
+	"folders": [
+		{
+			"path": "."
+		}
+	],
+	"settings": {
+		"LSP": {
+			"LSP-typescript": {
+				"disabled_capabilities": {
+					"documentFormattingProvider": true,
+					"documentRangeFormattingProvider": true
+				}
+			}
+		}
+	}
+}

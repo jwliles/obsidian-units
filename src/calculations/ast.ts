@@ -1,7 +1,12 @@
-import { AggregateFilter, AggregateFunction, AggregateOccurrence, AggregateScope } from './aggregate';
+import type {
+	AggregateFilter,
+	AggregateFunction,
+	AggregateOccurrence,
+	AggregateScope,
+} from "./aggregate";
 
 export interface AggregateExpressionNode {
-	kind: 'aggregate';
+	kind: "aggregate";
 	function: AggregateFunction;
 	scope: AggregateScope;
 	group: string;
@@ -15,15 +20,17 @@ export interface AggregateExpressionNode {
  * compatibility evaluator and pure arithmetic evaluator interpret this node.
  */
 export interface ScalarExpressionNode {
-	kind: 'scalar';
+	kind: "scalar";
 	source: string;
 	aggregates: AggregateOccurrence[];
 }
 
-export type StructuralNode = { kind: 'region-top'; name?: string; nameSource?: string } | { kind: 'region-bottom' };
+export type StructuralNode =
+	| { kind: "region-top"; name?: string; nameSource?: string }
+	| { kind: "region-bottom" };
 
 export type ExpressionNode = AggregateExpressionNode | ScalarExpressionNode;
 
 export type ExpressionParseOutcome =
-	| { kind: 'success'; node: ExpressionNode }
-	| { kind: 'error'; code: string; message: string };
+	| { kind: "success"; node: ExpressionNode }
+	| { kind: "error"; code: string; message: string };

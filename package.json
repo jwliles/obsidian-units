@@ -22,6 +22,7 @@
 	"author": "",
 	"license": "MIT",
 	"devDependencies": {
+		"@biomejs/biome": "2.5.10",
 		"@types/node": "^16.11.6",
 		"@typescript-eslint/eslint-plugin": "5.29.0",
 		"@typescript-eslint/parser": "5.29.0",
