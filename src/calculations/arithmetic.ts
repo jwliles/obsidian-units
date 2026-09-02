@@ -1,6 +1,6 @@
+import { type DecimalValue, ExactDecimal } from "./decimal";
 import { normalizeLabel } from "./normalize";
-import { EvaluatedValue } from "./types";
-import { DecimalValue, ExactDecimal } from "./decimal";
+import type { EvaluatedValue } from "./types";
 
 export type ArithmeticOutcome =
 	| { kind: "success"; value: number; exact: string; decimalPlaces: number }

@@ -13,7 +13,7 @@ import {
 	parseLinktext,
 	resolveSubpath,
 } from "obsidian";
-import { Prec, Range, StateEffect, StateField } from "@codemirror/state";
+import { Prec, type Range, StateEffect, StateField } from "@codemirror/state";
 import {
 	Decoration,
 	DecorationSet,

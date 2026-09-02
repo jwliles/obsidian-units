@@ -13,5 +13,33 @@
 				}
 			}
 		}
-	}
+	},
+	"build_systems": [
+		{
+			"name": "Quantities: Dev",
+			"cmd": [
+				"npm",
+				"run",
+				"dev"
+			],
+			"working_dir": "$project_path"
+		},
+		{
+			"name": "Quantities: Build",
+			"cmd": [
+				"npm",
+				"run",
+				"build"
+			],
+			"working_dir": "$project_path"
+		},
+		{
+			"name": "Quantities: Test",
+			"cmd": [
+				"npm",
+				"test"
+			],
+			"working_dir": "$project_path"
+		}
+	]
 }
