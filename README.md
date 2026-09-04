@@ -4,7 +4,7 @@ Obsidian Quantities is a calculation language that lives naturally inside your
 notes. It began with unit conversion, grew into a practical calculator for
 recipes and everyday quantities, and now supports variables and scoped
 aggregation for ledger-like, Soulver-style calculations. Markdown remains
-readable source: only explicitly marked inline code belongs to the plugin, and
+readable source: only explicitly allowed files and marked inline code belong to the plugin, and
 headings or layout never acquire hidden calculation meaning.
 
 ```markdown
@@ -19,7 +19,9 @@ Total Expenses = `=sum:ex`
 Groceries = `=sum:ex{gr}`
 ```
 
-The default `` `=` `` prefix is configurable, so users can avoid inline-query collisions with Dataview or another plugin. Obsidian Quantities only evaluates inline code using the active marker; ordinary inline code remains untouched.
+Files participate according to an All/No default, path and glob exceptions,
+file commands, and a final `quantities` frontmatter override.
+Within eligible files, the default `` `=` `` prefix is configurable.
 
 This README is the short tour. The [manual](MANUAL.md) is the complete user
 guide, [semantics](SEMANTICS.md) defines the language precisely, and the
@@ -36,6 +38,10 @@ Obsidian Quantities is currently installed manually:
 3. Reload Obsidian and enable **Obsidian Quantities** under **Settings → Community plugins**.
 
 For development, clone the repository directly into that plugin directory, run `npm install`, then run `npm run build`.
+
+After enabling the plugin, configure **Settings → Obsidian Quantities → File
+eligibility**, run **Enable Quantities for current file**, or add
+`quantities: true` frontmatter. The initial default is **No files**.
 
 ## Highlights
 
@@ -161,12 +167,16 @@ decimal places.
 - **Insert unit conversion result only** replaces a conversion with only its formatted result.
 - **Toggle rendered calculations in active editor** toggles calculation rendering in the active editor.
 - **Update Quantities markers in current file** migrates recognized expressions from the previous marker to the active marker.
+- **Enable Quantities for current file** and **Disable Quantities for current file** store an explicit JSON-backed decision for that note.
+
+File and folder context menus provide the same controls; folder decisions apply
+recursively.
 
 The calculator ribbon icon also converts the current line.
 
 ## Settings
 
-Obsidian Quantities provides settings for decimal precision, the expression marker, Live Preview rendering, per-unit display style, and material densities. See the [settings reference](MANUAL.md#settings) for exact behavior.
+Obsidian Quantities provides settings for file eligibility, decimal precision, the expression marker, Live Preview rendering, per-unit display style, and material densities. See the [settings reference](MANUAL.md#settings) for exact behavior.
 
 Material densities are stored with the rest of the plugin settings in `data.json`:
 

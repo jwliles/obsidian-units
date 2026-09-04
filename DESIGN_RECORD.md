@@ -143,6 +143,20 @@ contains an aggregate. Regional reads can then exclude aggregate-containing
 declarations without dependency or provenance analysis. Merely referencing a
 previous aggregate result does not set this flag.
 
+## File eligibility is explicit and layered
+
+File participation resolves from a configurable **All files / No files**
+default. Vault-relative exact paths and case-sensitive globs invert that
+default. File and recursive folder decisions created from commands or context
+menus are stored in plugin `data.json` and override the default and exceptions;
+an exact file decision takes precedence over a containing folder decision, and
+the most specific folder decision wins. A boolean `quantities` frontmatter
+value is always final.
+
+Path-rooted exceptions and stored decisions follow file and folder renames.
+This keeps ordinary code notes outside the evaluator without weakening the
+explicit inline expression marker in participating notes.
+
 ## Deferred work
 
 - Calculation traces showing variable provenance and aggregate membership.
@@ -150,9 +164,6 @@ previous aggregate result does not set this flag.
 - Fixture-level marker configuration or a permanently default-marker corpus.
 - Decisions for aggregating unit-bearing quantities and aggregate-containing
   declaration histories beyond the existing recursion safety rule.
-- File eligibility controlled by an All/None default, vault-relative path/glob
-  exceptions that invert it, and boolean `quantities: true` or `false`
-  frontmatter as the final override.
 - Multi-region member-set selection, indexed regions, broader bracket query
   forms, and `list:>[]`.
 - A `mode` aggregate, unless a use case establishes its tie semantics.

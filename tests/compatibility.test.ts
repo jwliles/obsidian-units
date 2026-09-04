@@ -212,6 +212,7 @@ async function testEmbeddedSourceResolution() {
 		} as any,
 	);
 	assert.deepEqual(renderSource, {
+		path: "source.md",
 		text: embeddedText,
 		from: reportStart,
 		to: reportEnd,
@@ -257,6 +258,7 @@ async function testEmbeddedSourceResolution() {
 		} as any,
 	);
 	assert.deepEqual(detachedRenderSource, {
+		path: "source.md",
 		text: embeddedText,
 		from: reportStart,
 		to: reportEnd,

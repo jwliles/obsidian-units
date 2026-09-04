@@ -1,6 +1,16 @@
 export class App {}
+export class AbstractInputSuggest<T> {
+	app: any;
+	limit = 0;
+	constructor(app: any, ..._args: any[]) {
+		this.app = app;
+	}
+	setValue(_value: string) {}
+	close() {}
+}
 export class Editor {}
 export class MarkdownView {}
+export class Menu {}
 export class Modal {
 	contentEl: any;
 	constructor(..._args: any[]) {
@@ -19,6 +29,7 @@ export class Plugin {
 	addSettingTab() {}
 	registerEditorExtension() {}
 	registerMarkdownPostProcessor() {}
+	registerEvent() {}
 	loadData() {}
 	saveData() {}
 }
@@ -45,6 +56,9 @@ export class Setting {
 	addText() {
 		return this;
 	}
+	addTextArea() {
+		return this;
+	}
 	setDesc() {
 		return this;
 	}
@@ -58,6 +72,10 @@ export class Setting {
 export class TFile {
 	constructor(public path = "") {}
 }
+export class TAbstractFile {
+	constructor(public path = "") {}
+}
+export class TFolder extends TAbstractFile {}
 export function parseLinktext(linktext: string) {
 	const hash = linktext.indexOf("#");
 	return hash < 0
@@ -68,6 +86,7 @@ export function resolveSubpath(cache: any, subpath: string) {
 	return cache.subpaths?.[subpath] ?? null;
 }
 export const editorLivePreviewField = {};
+export const editorInfoField = {};
 export const Prec = { highest: (value: any) => value };
 export const StateEffect = {
 	define: () => ({ of: (value: any) => value, is: () => false }),

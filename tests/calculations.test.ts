@@ -5,11 +5,91 @@ import { parseExpression } from "../src/calculations/expression-parser";
 import { evaluateDocument } from "../src/document/evaluation-index";
 import { scanInlineCode } from "../src/document/scanner";
 import {
+	isFileEligible,
+	quantitiesFrontmatterOverride,
+	remapFileEligibilityPaths,
+} from "../src/document/file-eligibility";
+import {
 	concealDeclarationSigils,
 	shouldConcealStructuralMarkerInReadingView,
 } from "../main";
 
 const options = { formatNumber: (value: number) => String(value) };
+
+// File evaluation is opt-in, with frontmatter as the final override.
+const eligibility = {
+	fileEligibilityDefault: "none" as const,
+	fileEligibilityExceptions: ["Finance/**", "Dashboard.md"],
+	fileEligibilityOverrides: {},
+};
+assert.equal(isFileEligible("Coding/notes.md", eligibility), false);
+assert.equal(isFileEligible("Finance/2026/budget.md", eligibility), true);
+assert.equal(isFileEligible("Dashboard.md", eligibility), true);
+assert.equal(isFileEligible("dashboard.md", eligibility), false);
+assert.equal(isFileEligible("Coding/notes.md", eligibility, true), true);
+assert.equal(isFileEligible("Finance/budget.md", eligibility, false), false);
+assert.equal(
+	isFileEligible("Coding/notes.md", {
+		fileEligibilityDefault: "all",
+		fileEligibilityExceptions: ["Coding/**"],
+		fileEligibilityOverrides: {},
+	}),
+	false,
+);
+assert.equal(
+	isFileEligible("Coding/notes.md", {
+		fileEligibilityDefault: "all",
+		fileEligibilityExceptions: ["Coding/**"],
+		fileEligibilityOverrides: { "Coding/notes.md": true },
+	}),
+	true,
+);
+assert.equal(
+	isFileEligible("Projects/App/notes.md", {
+		fileEligibilityDefault: "none",
+		fileEligibilityExceptions: [],
+		fileEligibilityOverrides: {
+			"Projects/**": false,
+			"Projects/App/**": true,
+		},
+	}),
+	true,
+);
+assert.equal(
+	isFileEligible("Projects/App/notes.md", {
+		fileEligibilityDefault: "none",
+		fileEligibilityExceptions: [],
+		fileEligibilityOverrides: {
+			"Projects/App/**": true,
+			"Projects/App/notes.md": false,
+		},
+	}),
+	false,
+);
+assert.equal(
+	quantitiesFrontmatterOverride("---\nquantities: true\n---\n"),
+	true,
+);
+assert.equal(
+	quantitiesFrontmatterOverride("---\nquantities: false # code\n---\n"),
+	false,
+);
+const renamedEligibility = {
+	fileEligibilityDefault: "none" as const,
+	fileEligibilityExceptions: ["Finance/**", "Dashboard.md"],
+	fileEligibilityOverrides: { "Finance/2026.md": false },
+};
+assert.equal(
+	remapFileEligibilityPaths(renamedEligibility, "Finance", "Accounts"),
+	true,
+);
+assert.deepEqual(renamedEligibility.fileEligibilityExceptions, [
+	"Accounts/**",
+	"Dashboard.md",
+]);
+assert.deepEqual(renamedEligibility.fileEligibilityOverrides, {
+	"Accounts/2026.md": false,
+});
 
 function outcomes(source: string) {
 	return evaluateDocument(source, options)

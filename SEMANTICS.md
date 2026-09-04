@@ -13,7 +13,10 @@ by `MANUAL.md` except where they affect declarations or aggregation.
 
 ## Expression ownership and scanning
 
-Only single-backtick inline code beginning with the configured Quantities marker is
+Only eligible files participate in evaluation. Eligibility resolves the
+All/No default, matching path/glob exceptions, an explicit JSON-backed file
+decision, and finally a `quantities` frontmatter boolean.
+Within an eligible file, only single-backtick inline code beginning with the configured Quantities marker is
 evaluated. The default marker is `=`:
 
 ```markdown

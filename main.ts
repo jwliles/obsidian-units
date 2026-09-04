@@ -1,14 +1,19 @@
 import {
 	App,
+	AbstractInputSuggest,
 	Editor,
 	MarkdownPostProcessorContext,
 	MarkdownView,
+	Menu,
 	Modal,
 	Notice,
 	Plugin,
 	PluginSettingTab,
 	Setting,
 	TFile,
+	TAbstractFile,
+	TFolder,
+	editorInfoField,
 	editorLivePreviewField,
 	parseLinktext,
 	resolveSubpath,
@@ -29,6 +34,12 @@ import {
 import { parseAggregate } from "./src/calculations/aggregate";
 import { evaluateDocument } from "./src/document/evaluation-index";
 import { DecimalValue, ExactDecimal } from "./src/calculations/decimal";
+import {
+	isFileEligible,
+	normalizedFilePath,
+	quantitiesFrontmatterOverride,
+	remapFileEligibilityPaths,
+} from "./src/document/file-eligibility";
 
 type UnitDisplayForm = "abbr" | "name";
 
@@ -45,6 +56,9 @@ interface ObsidianQuantitiesSettings {
 	previousExpressionMarker: string;
 	unitDisplayOverrides: Record<string, UnitDisplayForm>;
 	densities: DensityEntry[];
+	fileEligibilityDefault: "all" | "none";
+	fileEligibilityExceptions: string[];
+	fileEligibilityOverrides: Record<string, boolean>;
 }
 
 export const DEFAULT_SETTINGS: ObsidianQuantitiesSettings = {
@@ -54,6 +68,9 @@ export const DEFAULT_SETTINGS: ObsidianQuantitiesSettings = {
 	previousExpressionMarker: "=",
 	unitDisplayOverrides: {},
 	densities: [],
+	fileEligibilityDefault: "none",
+	fileEligibilityExceptions: [],
+	fileEligibilityOverrides: {},
 };
 
 const DENSITY_UNIT_OPTIONS = ["g/ml", "kg/m^3", "lb/ft^3", "oz/fl oz"];
@@ -1218,6 +1235,55 @@ export default class ObsidianQuantitiesPlugin extends Plugin {
 				this.updateMarkersInCurrentFile(editor),
 		});
 
+		this.addCommand({
+			id: "enable-quantities-for-current-file",
+			name: "Enable Quantities for current file",
+			checkCallback: (checking) => {
+				const file = this.app.workspace.getActiveFile();
+				if (!file || file.extension !== "md") return false;
+				if (!checking) void this.setFileEligibility(file, true);
+				return true;
+			},
+		});
+
+		this.addCommand({
+			id: "disable-quantities-for-current-file",
+			name: "Disable Quantities for current file",
+			checkCallback: (checking) => {
+				const file = this.app.workspace.getActiveFile();
+				if (!file || file.extension !== "md") return false;
+				if (!checking) void this.setFileEligibility(file, false);
+				return true;
+			},
+		});
+
+		this.registerEvent(
+			this.app.workspace.on("file-menu", (menu, file) => {
+				if (file instanceof TFolder) {
+					this.addFolderEligibilityMenuItems(menu, file);
+					return;
+				}
+				if (!(file instanceof TFile) || file.extension !== "md") return;
+				menu.addItem((item) =>
+					item
+						.setTitle("Enable Quantities for this file")
+						.setIcon("calculator")
+						.onClick(() => void this.setFileEligibility(file, true)),
+				);
+				menu.addItem((item) =>
+					item
+						.setTitle("Disable Quantities for this file")
+						.setIcon("calculator")
+						.onClick(() => void this.setFileEligibility(file, false)),
+				);
+			}),
+		);
+		this.registerEvent(
+			this.app.vault.on("rename", (file, oldPath) => {
+				void this.followRenamedFile(file, oldPath);
+			}),
+		);
+
 		this.addSettingTab(new ObsidianQuantitiesSettingTab(this.app, this));
 		this.registerEditorExtension([
 			this.livePreviewRenderingField,
@@ -1229,15 +1295,110 @@ export default class ObsidianQuantitiesPlugin extends Plugin {
 	}
 
 	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		const loaded = (await this.loadData()) as
+			| (Partial<ObsidianQuantitiesSettings> & {
+					allowedFilePatterns?: unknown;
+			  })
+			| null;
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, loaded);
 		if (!isValidExpressionMarker(this.settings.expressionMarker))
 			this.settings.expressionMarker = DEFAULT_SETTINGS.expressionMarker;
 		if (!isValidExpressionMarker(this.settings.previousExpressionMarker))
 			this.settings.previousExpressionMarker = this.settings.expressionMarker;
+		const legacyPatterns = loaded?.allowedFilePatterns;
+		if (!Array.isArray(loaded?.fileEligibilityExceptions))
+			this.settings.fileEligibilityExceptions = Array.isArray(legacyPatterns)
+				? legacyPatterns.filter(
+						(value): value is string => typeof value === "string",
+					)
+				: [];
+		if (this.settings.fileEligibilityDefault !== "all")
+			this.settings.fileEligibilityDefault = "none";
+		if (
+			!this.settings.fileEligibilityOverrides ||
+			typeof this.settings.fileEligibilityOverrides !== "object" ||
+			Array.isArray(this.settings.fileEligibilityOverrides)
+		)
+			this.settings.fileEligibilityOverrides = {};
 	}
 
 	async saveSettings() {
 		await this.saveData(this.settings);
+	}
+
+	isFileEligible(path: string, source: string): boolean {
+		return isFileEligible(
+			path,
+			this.settings,
+			quantitiesFrontmatterOverride(source),
+		);
+	}
+
+	private async setFileEligibility(
+		file: TFile,
+		enabled: boolean,
+	): Promise<void> {
+		this.settings.fileEligibilityOverrides[normalizedFilePath(file.path)] =
+			enabled;
+		await this.saveSettings();
+		this.refreshEligibilityViews();
+		const source = await readVaultFile(file, this);
+		const frontmatter = source
+			? quantitiesFrontmatterOverride(source)
+			: undefined;
+		if (typeof frontmatter === "boolean" && frontmatter !== enabled) {
+			new Notice(
+				`Saved the file decision, but quantities: ${frontmatter} in frontmatter remains the final override for ${file.path}.`,
+			);
+			return;
+		}
+		new Notice(
+			`Quantities ${enabled ? "enabled" : "disabled"} for ${file.path}.`,
+		);
+	}
+
+	private addFolderEligibilityMenuItems(menu: Menu, folder: TFolder): void {
+		menu.addItem((item) =>
+			item
+				.setTitle("Enable Quantities for this folder")
+				.setIcon("calculator")
+				.onClick(() => void this.setFolderEligibility(folder, true)),
+		);
+		menu.addItem((item) =>
+			item
+				.setTitle("Disable Quantities for this folder")
+				.setIcon("calculator")
+				.onClick(() => void this.setFolderEligibility(folder, false)),
+		);
+	}
+
+	private async setFolderEligibility(
+		folder: TFolder,
+		enabled: boolean,
+	): Promise<void> {
+		const pattern = folder.path
+			? `${normalizedFilePath(folder.path)}/**`
+			: "**";
+		this.settings.fileEligibilityOverrides[pattern] = enabled;
+		await this.saveSettings();
+		this.refreshEligibilityViews();
+		new Notice(
+			`Quantities ${enabled ? "enabled" : "disabled"} for ${folder.path || "the vault"}. Individual file decisions and frontmatter can override this folder decision.`,
+		);
+	}
+
+	private async followRenamedFile(
+		file: TAbstractFile,
+		oldPath: string,
+	): Promise<void> {
+		if (!remapFileEligibilityPaths(this.settings, oldPath, file.path)) return;
+		await this.saveSettings();
+		this.refreshEligibilityViews();
+	}
+
+	refreshEligibilityViews(): void {
+		this.refreshAllLivePreviews();
+		this.app.workspace.updateOptions();
 	}
 
 	evaluateInlineExpression(
@@ -2447,9 +2608,13 @@ function buildInlineCodeDecorations(
 	view: EditorView,
 	plugin: ObsidianQuantitiesPlugin,
 ): DecorationSet {
+	const source = view.state.doc.toString();
+	const file = view.state.field(editorInfoField, false)?.file;
 	if (
 		!view.state.field(editorLivePreviewField, false) ||
-		!plugin.isLivePreviewRenderingEnabled(view)
+		!plugin.isLivePreviewRenderingEnabled(view) ||
+		!file ||
+		!plugin.isFileEligible(file.path, source)
 	) {
 		return Decoration.none;
 	}
@@ -2457,7 +2622,7 @@ function buildInlineCodeDecorations(
 	const decorations: Range<Decoration>[] = [];
 	const generation = plugin.livePreviewRenderingGeneration(view);
 	const selectionRanges = view.state.selection.ranges;
-	const evaluationIndex = plugin.evaluateDocument(view.state.doc.toString());
+	const evaluationIndex = plugin.evaluateDocument(source);
 	const documentDiagnostics = new Map(
 		evaluationIndex.diagnostics().map((item) => [item.offset, item]),
 	);
@@ -2553,9 +2718,12 @@ async function renderInlineCodeConversions(
 	const sourceText = renderSource?.text ?? null;
 	const sectionStartOffset = renderSource?.from ?? null;
 	const sectionEndOffset = renderSource?.to ?? null;
-	const evaluationIndex = sourceText
-		? plugin.evaluateDocument(sourceText)
-		: null;
+	const evaluationIndex =
+		sourceText &&
+		renderSource &&
+		plugin.isFileEligible(renderSource.path, sourceText)
+			? plugin.evaluateDocument(sourceText)
+			: null;
 	const sectionEntries =
 		evaluationIndex && sectionStartOffset !== null && sectionEndOffset !== null
 			? evaluationIndex
@@ -2664,6 +2832,7 @@ function concealStructuralMarker(codeElement: HTMLElement): void {
 }
 
 interface RenderSource {
+	path: string;
 	text: string;
 	from: number;
 	to: number;
@@ -2721,11 +2890,12 @@ export async function getRenderSource(
 	}
 	return sectionInfo
 		? {
+				path: file.path,
 				text,
 				from: getLineStartOffset(text, sectionInfo.lineStart),
 				to: getLineStartOffset(text, sectionInfo.lineEnd + 1),
 			}
-		: { text, from: 0, to: text.length };
+		: { path: file.path, text, from: 0, to: text.length };
 }
 
 async function resolveEmbeddedRenderSource(
@@ -2741,16 +2911,18 @@ async function resolveEmbeddedRenderSource(
 	if (!embeddedFile) return null;
 	const text = await readVaultFile(embeddedFile, plugin);
 	if (text === null) return null;
-	if (!link.subpath) return { text, from: 0, to: text.length };
+	if (!link.subpath)
+		return { path: embeddedFile.path, text, from: 0, to: text.length };
 	const cache = plugin.app.metadataCache.getFileCache(embeddedFile);
 	const subpath = cache ? resolveSubpath(cache, link.subpath) : null;
 	return subpath
 		? {
+				path: embeddedFile.path,
 				text,
 				from: subpath.start.offset,
 				to: subpath.end?.offset ?? text.length,
 			}
-		: { text, from: 0, to: text.length };
+		: { path: embeddedFile.path, text, from: 0, to: text.length };
 }
 
 function embeddedWikiLinkSource(text: string): string | null {
@@ -2985,6 +3157,42 @@ function createResultSpan(text: string, className: string): HTMLSpanElement {
 	return span;
 }
 
+class FilePathSuggest extends AbstractInputSuggest<string> {
+	constructor(
+		app: App,
+		input: HTMLInputElement,
+		private readonly choose: (path: string) => void,
+	) {
+		super(app, input);
+		this.limit = 50;
+	}
+
+	protected getSuggestions(query: string): string[] {
+		const needle = query.trim().toLocaleLowerCase();
+		return this.app.vault
+			.getAllLoadedFiles()
+			.map((file) =>
+				file instanceof TFile ? file.path : file.path ? `${file.path}/**` : "",
+			)
+			.filter(
+				(path, index, paths) =>
+					path.length > 0 &&
+					path.toLocaleLowerCase().includes(needle) &&
+					paths.indexOf(path) === index,
+			);
+	}
+
+	renderSuggestion(path: string, element: HTMLElement): void {
+		element.setText(path);
+	}
+
+	selectSuggestion(path: string): void {
+		this.setValue(path);
+		this.close();
+		this.choose(path);
+	}
+}
+
 class ObsidianQuantitiesSettingTab extends PluginSettingTab {
 	plugin: ObsidianQuantitiesPlugin;
 
@@ -3052,8 +3260,102 @@ class ObsidianQuantitiesSettingTab extends PluginSettingTab {
 					}),
 			);
 
+		this.renderFileEligibilitySection(containerEl);
+
 		this.renderUnitDisplayOverrideSection(containerEl);
 		this.renderDensitiesSection(containerEl);
+	}
+
+	private renderFileEligibilitySection(containerEl: HTMLElement): void {
+		new Setting(containerEl)
+			.setName("File eligibility")
+			.setDesc(
+				"Choose the vault default, then add exact paths or globs that invert it. Frontmatter quantities: true or false is final.",
+			)
+			.setHeading();
+
+		new Setting(containerEl)
+			.setName("Default")
+			.setDesc(
+				"Behavior for files that match no exception or explicit file decision.",
+			)
+			.addDropdown((dropdown) =>
+				dropdown
+					.addOption("all", "All files")
+					.addOption("none", "No files")
+					.setValue(this.plugin.settings.fileEligibilityDefault)
+					.onChange(async (value) => {
+						this.plugin.settings.fileEligibilityDefault = value as
+							| "all"
+							| "none";
+						await this.plugin.saveSettings();
+						this.plugin.refreshEligibilityViews();
+					}),
+			);
+
+		const exceptions = this.plugin.settings.fileEligibilityExceptions;
+		new Setting(containerEl)
+			.setName("Add path exception")
+			.setDesc("Choose a suggested file/folder or enter a case-sensitive glob.")
+			.addText((text) => {
+				text.setPlaceholder("Finance/**");
+				new FilePathSuggest(this.app, text.inputEl, async (path) => {
+					const pattern = path.trim();
+					if (!pattern || exceptions.includes(pattern)) return;
+					exceptions.push(pattern);
+					await this.plugin.saveSettings();
+					this.plugin.refreshEligibilityViews();
+					this.display();
+				});
+				text.inputEl.addEventListener("keydown", (event) => {
+					if (event.key !== "Enter") return;
+					event.preventDefault();
+					const pattern = text.getValue().trim();
+					if (!pattern || exceptions.includes(pattern)) return;
+					exceptions.push(pattern);
+					void this.plugin.saveSettings().then(() => {
+						this.plugin.refreshEligibilityViews();
+						this.display();
+					});
+				});
+			});
+
+		for (const pattern of exceptions) {
+			new Setting(containerEl).setName(pattern).addExtraButton((button) =>
+				button
+					.setIcon("trash")
+					.setTooltip("Remove exception")
+					.onClick(async () => {
+						this.plugin.settings.fileEligibilityExceptions = exceptions.filter(
+							(candidate) => candidate !== pattern,
+						);
+						await this.plugin.saveSettings();
+						this.plugin.refreshEligibilityViews();
+						this.display();
+					}),
+			);
+		}
+
+		for (const [path, enabled] of Object.entries(
+			this.plugin.settings.fileEligibilityOverrides,
+		)) {
+			new Setting(containerEl)
+				.setName(path)
+				.setDesc(
+					`Explicitly ${enabled ? "enabled" : "disabled"} by a file or folder command.`,
+				)
+				.addExtraButton((button) =>
+					button
+						.setIcon("trash")
+						.setTooltip("Clear file decision")
+						.onClick(async () => {
+							delete this.plugin.settings.fileEligibilityOverrides[path];
+							await this.plugin.saveSettings();
+							this.plugin.refreshEligibilityViews();
+							this.display();
+						}),
+				);
+		}
 	}
 
 	private renderUnitDisplayOverrideSection(containerEl: HTMLElement): void {

@@ -78,24 +78,7 @@ and their interaction with ordinary filters. In particular, `list:>[]` is
 ambiguous between listing declarations whose values are lists and flattening
 the labels represented by those lists.
 
-## 4. File eligibility
-
-If evaluation expands beyond the currently opened source note, settings should
-make file participation explicit:
-
-- an **All files / No files** default;
-- path and glob exceptions that invert that default;
-- path suggestions using Obsidian's public suggestion APIs where available;
-- an exact file path as a valid exception, not only folder globs;
-- a frontmatter boolean such as `quantities: false` or `quantities: true` as
-  the final per-file override.
-
-Thus an empty exception list has an unambiguous meaning under either default,
-while **No files** plus one path supports evaluating only one note. Glob
-library choice, case sensitivity, normalization, and rename handling must be
-settled before implementation.
-
-## 5. Deferred aggregate functions
+## 4. Deferred aggregate functions
 
 `mode` remains deferred until a compelling scalar use case and tie policy are
 clear. Currency conversion likewise remains outside the unit engine until an

@@ -8,6 +8,10 @@ evaluator follows [SEMANTICS.md](SEMANTICS.md); see
 
 ## Quick start
 
+Quantities defaults to **No files**. First add the note's exact vault path or a
+glob matching it under **Settings → Obsidian Quantities → File eligibility**, use
+the enable command, or add `quantities: true` to the note's frontmatter.
+
 With the default expression marker, `=`, write:
 
 ```markdown
@@ -51,6 +55,38 @@ After a marker change, expressions using the old marker no longer calculate. Dec
 Use the command **Update Quantities markers in current file** to migrate recognized expressions in the active note from the previous marker to the active marker. The command updates declarations, aggregates, and conversions. It deliberately leaves ambiguous standalone arithmetic unchanged because another plugin may own it.
 
 The previous marker is retained so the migration command can identify what to replace. If plugin settings are not synchronized across devices, notes using a customized marker may not be portable until the other device is configured the same way.
+
+## File eligibility
+
+Choose **All files** or **No files** as the default, then add exact vault paths
+or globs as exceptions that invert that default. Path suggestions are available
+while adding an exception. Matching is case-sensitive; `*` matches within one
+path segment, while `**` spans folders.
+
+```text
+Finance/**
+Dashboard.md
+```
+
+A frontmatter boolean is the final per-file override, regardless of the path
+list:
+
+```yaml
+---
+quantities: true
+---
+```
+
+Use `quantities: false` to disable an otherwise allowed note. Eligibility is
+based on the source note for embeds. An ineligible note's inline code is left
+untouched in both Live Preview and Reading View.
+
+**Enable Quantities for current file** and **Disable Quantities for current
+file** are available from the command palette and a file's context menu. Folder
+context menus provide recursive enable/disable actions. These create explicit
+decisions in the plugin's JSON data and take priority over defaults and path
+exceptions. Exact file decisions override parent-folder decisions. They follow
+file and folder renames. Frontmatter remains the final override.
 
 ## Rendering
 
@@ -527,6 +563,12 @@ Temporarily toggles rendered calculations for the active editor.
 
 Migrates recognized expressions in the active note from the stored previous marker to the current marker. A confirmation describes the affected file and marker change. Ambiguous standalone arithmetic is not rewritten.
 
+### Enable/Disable Quantities for current file
+
+Stores an explicit decision for the active Markdown file in the plugin's
+`data.json`. The same actions are available from the file context menu, and
+folder context menus offer recursive enable/disable actions.
+
 The calculator ribbon icon runs the current-line unit conversion action.
 
 ## Settings
@@ -542,6 +584,12 @@ Sets the exact prefix that claims an inline code expression for Obsidian Quantit
 ### Render in Live Preview
 
 Controls whether marked calculations render automatically in Live Preview. Reading View rendering remains available.
+
+### File eligibility
+
+Selects an **All files** or **No files** default and lists exact paths and globs
+that invert it. It also shows explicit decisions created by the file commands,
+which can be cleared individually. The initial default is **No files**.
 
 ### Unit display overrides
 
@@ -680,7 +728,11 @@ Display mode            `=5 ft to cm | value`
 
 ## Plugin data
 
-Obsidian stores plugin settings in `data.json`, including decimal precision, the active and previous markers, Live Preview rendering preference, unit display overrides, and configured material densities. Edit settings through Obsidian when possible so values are validated.
+Obsidian stores plugin settings in `data.json`, including file-eligibility
+defaults, path/glob exceptions, explicit file and folder decisions, decimal
+precision, the active and previous markers, Live Preview rendering preference,
+unit display overrides, and configured material densities. Edit settings
+through Obsidian when possible so values are validated.
 
 ## Development
 
